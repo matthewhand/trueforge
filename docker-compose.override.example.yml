@@ -1,0 +1,103 @@
+# Example Compose override — host-networked Postgres/Redis + common deviations.
+#
+# TrueForge fork-local example (not used by upstream `pnpm smoke`). Copy it to
+# `docker-compose.override.yml` (gitignored) so plain `docker compose up -d`
+# picks it up automatically:
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   docker compose up --build --wait
+#
+# Or use it explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.override.example.yml up --build --wait
+#
+# Requires packages/trueforge/.env to exist (compose env_file is required: true).
+# The only hard-required value when STANDALONE=false is TRUEFORGE_API_KEY;
+# the POSTGRES_USER/PASSWORD/DB defaults already match the app config defaults.
+#
+# `!reset []` drops an attribute inherited from docker-compose.yml (Compose
+# v2.24+); host networking must not publish ports.
+#
+# Note: host-networked Postgres/Redis bind :5432/:6379 on the host, so this
+# override cannot run alongside `pnpm dev:infra` (docker-compose.dev.yml binds
+# the same ports). Stop one stack before starting the other.
+
+services:
+  postgres:
+    # Deviation from docker-compose.yml: host networking makes Postgres/Redis
+    # reachable from apps running directly on the host (`pnpm start`,
+    # `node dist/main.js`, external harnesses) via localhost:5432 / :6379 while
+    # keeping the same project layout.
+    network_mode: host
+
+  redis:
+    network_mode: host
+
+  server:
+    network_mode: host
+    # Base file publishes 8791:8790; host networking must not publish ports.
+    ports: !reset []
+    # Base healthcheck probes 8790; PORT above moves the listener to 8791.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8791/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+    environment:
+      NODE_ENV: production
+      # Keep the base file's host-port convention (8791) so URLs do not change
+      # vs bridge mode and `pnpm dev` (8790) stays free on the host.
+      PORT: 8791
+      # Under host networking there is no `postgres`/`redis` DNS name; the app
+      # config defaults (localhost:5432 / redis://localhost:6379) are correct.
+      STANDALONE: 'false'
+      # POSTGRES_HOST/REDIS_URL intentionally NOT set: base-file values would
+      # override the .env/defaults with compose DNS names that do not resolve
+      # under host networking. PUBLIC_BASE_URL falls back to
+      # http://localhost:$PORT; uncomment to make MCP OAuth/OIDC callbacks work:
+      # PUBLIC_BASE_URL: http://localhost:8790
+
+  controller:
+    network_mode: host
+    command: ['node', 'dist/controller-main.js']
+    environment:
+      NODE_ENV: production
+      STANDALONE: 'false'
+      # Base-file SERVER_URL (http://server:8790) does not resolve under host
+      # networking; localhost on the server's PORT (8791) is correct here.
+      SERVER_URL: http://localhost:8791
+      # Same as server: no POSTGRES_HOST override under host networking.
+
+# ---------------------------------------------------------------------------
+# Other common deviations (edit the copied override, not this example):
+#
+# RESTRICT the UI/API to localhost in bridge mode. Without OIDC configured,
+# anyone who can reach the server port is admin (fixed local admin identity),
+# so loopback-binding is the right default for shared hosts:
+#
+#   server:
+#     ports: ['127.0.0.1:8791:8790']
+#
+# Single-process stack (drop redis + controller; keeps the same Postgres):
+#
+#   redis:      { profiles: ['off'] }
+#   controller: { profiles: ['off'] }
+#   server:
+#     environment:
+#       STANDALONE: 'true'
+#
+# Different host port in bridge mode (keep PUBLIC_BASE_URL in sync):
+#
+#   server:
+#     ports: ['9791:8790']
+#     environment:
+#       PUBLIC_BASE_URL: http://localhost:9791
+#
+# LAN exposure (e.g. for the LLM proxy at 10.0.0.30:8000 or other LAN clients)
+# is the DEFAULT in both modes unless you loopback-bind: the base file publishes
+# 0.0.0.0:8791 and host networking binds 0.0.0.0:8790. Prefer firewall rules or
+# loopback binding + OIDC before exposing beyond your machine.
+# ---------------------------------------------------------------------------

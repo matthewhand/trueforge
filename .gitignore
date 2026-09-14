@@ -42,3 +42,5 @@ service-account*.json
 .vscode
 
 .certs/
+# Fork-local live Compose override (copied from the tracked *.example.yml)
+docker-compose.override.yml
