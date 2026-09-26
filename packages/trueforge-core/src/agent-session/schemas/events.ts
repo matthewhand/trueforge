@@ -1,7 +1,8 @@
 /**
  * Turn/session event product schemas. Event payloads come from the harness; this
- * module owns turn lifecycle events (turn.created / turn.done) and the persisted
- * event unions the store writes. SSE streaming envelopes stay in server/schemas.
+ * module owns turn lifecycle events (turn.created / turn.update / turn.done) and
+ * the persisted event unions the store writes. SSE streaming envelopes stay in
+ * server/schemas.
  */
 import { z } from '@hono/zod-openapi';
 import type { WithRegisteredPassthrough } from '../../core/events/PassthroughEvents';
@@ -17,12 +18,17 @@ import {
   ToolApprovalRequiredEventSchema,
   ToolResponseEventSchema,
   ToolResponseRequiredEventSchema,
+  UserMCPAuthContinueEventSchema,
+  UserToolApprovalEventSchema,
+  UserToolApprovalPolicyEventSchema,
+  UserToolResponseEventSchema,
 } from '../../core/events/schema';
 import {
   TurnInputItemSchema,
   TurnStateCancelledSchema,
   TurnStateDoneSchema,
   TurnStateErrorSchema,
+  TurnStatePausedSchema,
   TurnStateRunningSchema,
 } from './turn';
 
@@ -30,6 +36,7 @@ import {
 export const EventType = {
   ...HarnessEventType,
   TURN_CREATED: 'turn.created',
+  TURN_UPDATE: 'turn.update',
   TURN_DONE: 'turn.done',
 } as const;
 
@@ -58,10 +65,23 @@ export const TurnDoneEventSchema = z
   })
   .openapi('TurnDoneEvent');
 
+export const TurnUpdateEventSchema = z
+  .object({
+    type: z.literal(EventType.TURN_UPDATE).describe('Emitted when a turn pauses or resumes.'),
+    id: EventIdSchema,
+    state: z
+      .discriminatedUnion('status', [TurnStatePausedSchema, TurnStateRunningSchema])
+      .describe('Live non-terminal turn state (paused or running).'),
+    created_at: z.string().describe('ISO 8601 event timestamp.'),
+    thread_id: z.string().nullable().describe('Thread that owns the event; null for turn-level lifecycle events.'),
+  })
+  .openapi('TurnUpdateEvent');
+
 /** Built-in durable turn events — lifecycle + content; no deltas, no passthrough. */
 export const SessionEventSchema = z
   .discriminatedUnion('type', [
     TurnCreatedEventSchema,
+    TurnUpdateEventSchema,
     TurnDoneEventSchema,
     ModelMessageEventSchema,
     ToolResponseEventSchema,
@@ -72,6 +92,10 @@ export const SessionEventSchema = z
     SandboxCreatedEventSchema,
     ToolApprovalRequiredEventSchema,
     ToolResponseRequiredEventSchema,
+    UserToolApprovalEventSchema,
+    UserToolResponseEventSchema,
+    UserToolApprovalPolicyEventSchema,
+    UserMCPAuthContinueEventSchema,
   ])
   .openapi('SessionEvent');
 
@@ -84,6 +108,7 @@ export const SessionEventItemSchema = z
   .openapi('SessionEventItem');
 
 export type TurnCreatedEvent = z.infer<typeof TurnCreatedEventSchema>;
+export type TurnUpdateEvent = z.infer<typeof TurnUpdateEventSchema>;
 export type TurnDoneEvent = z.infer<typeof TurnDoneEventSchema>;
 export type SessionEvent = z.infer<typeof SessionEventSchema>;
 /**

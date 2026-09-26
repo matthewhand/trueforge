@@ -9,6 +9,7 @@ import { SqliteMcpServerStore } from '../../../src/db/sqlite/mcp-server-store/Sq
 import { SqliteModelProviderStore } from '../../../src/db/sqlite/model-provider-store/SqliteModelProviderStore';
 import { SqliteSandboxProviderStore } from '../../../src/db/sqlite/sandbox-provider-store/SqliteSandboxProviderStore';
 import { SqliteSkillStore } from '../../../src/db/sqlite/skill-store/SqliteSkillStore';
+import { SqliteWebSearchProviderStore } from '../../../src/db/sqlite/web-search-provider-store/SqliteWebSearchProviderStore';
 import { ListAgentsResponseSchema } from '../../../src/schemas/agent';
 
 const modelProvider = {
@@ -82,7 +83,10 @@ const deniedCanAccessAgent = jest.fn((_input: Parameters<Authorizer['canAccessAg
 const denyAllAuthorizer: Authorizer = {
   listAgentAccess: deniedListAgentAccess,
   canAccessAgent: deniedCanAccessAgent,
-  getPermissions: async ({ resourceIds }) => Object.fromEntries(resourceIds.map(id => [id, []])),
+  getPermissions: async ({ resourceType, resourceIds }) => ({
+    type: resourceType,
+    permissions: Object.fromEntries(resourceIds.map(id => [id, []])),
+  }),
 };
 
 describe('agents router', () => {
@@ -101,6 +105,7 @@ describe('agents router', () => {
       resolveMcpServerStore: () => new SqliteMcpServerStore(db),
       resolveSkillStore: () => new SqliteSkillStore(db),
       resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+      resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
       withTransaction: callback => db.transaction().execute(callback),
       resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
       authorizer: new TrueForgeAuthorizer(),
@@ -111,6 +116,7 @@ describe('agents router', () => {
       resolveMcpServerStore: () => new SqliteMcpServerStore(db),
       resolveSkillStore: () => new SqliteSkillStore(db),
       resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+      resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
       withTransaction: callback => db.transaction().execute(callback),
       resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
       authorizer: denyAllAuthorizer,
@@ -195,7 +201,7 @@ describe('agents router', () => {
     const body = (await response.json()) as {
       data: {
         base_url: string;
-        snippets: Array<{ sample_code: { stream: string; non_stream: string } }>;
+        snippets: Array<{ language: string; sample_code: { stream: string; non_stream: string } }>;
       };
     };
     expect(body.data.base_url).toBe(
@@ -203,9 +209,17 @@ describe('agents router', () => {
         ? new URL(new URL(configuration.PUBLIC_BASE_URL).pathname, 'http://localhost').href
         : 'http://localhost',
     );
-    expect(body.data.snippets.length).toBeGreaterThan(0);
-    expect(body.data.snippets[0]?.sample_code.stream).not.toContain('USER_API_KEY');
-    expect(body.data.snippets[0]?.sample_code.non_stream).not.toContain('USER_API_KEY');
+    expect(body.data.snippets.map(snippet => snippet.language)).toEqual(['typescript', 'python']);
+    const python = body.data.snippets.find(snippet => snippet.language === 'python');
+    const typescript = body.data.snippets.find(snippet => snippet.language === 'typescript');
+    expect(python?.sample_code.stream).toContain('create_turn_stream');
+    expect(python?.sample_code.stream).toContain('merge_event_delta');
+    expect(python?.sample_code.non_stream).toContain('create_turn');
+    expect(typescript?.sample_code.stream).toContain('mergeEventDelta');
+    for (const snippet of body.data.snippets) {
+      expect(snippet.sample_code.stream).not.toContain('USER_API_KEY');
+      expect(snippet.sample_code.non_stream).not.toContain('USER_API_KEY');
+    }
 
     const overridden = await router.request(
       `/${createdJson.data.id}/code-snippets?base_url=${encodeURIComponent('https://sample.com/trueforge')}`,

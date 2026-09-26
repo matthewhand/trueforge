@@ -482,8 +482,10 @@ describe('AgentConfigEditors', () => {
 
     expect(screen.getByRole('switch', { name: 'File downloads' })).toBeDisabled();
     expect(screen.getByRole('switch', { name: 'File downloads' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByRole('spinbutton', { name: /Compaction threshold tokens/ })).toBeDisabled();
-    expect(screen.getByRole('spinbutton', { name: /Compaction threshold tokens/ })).toHaveValue(42_000);
+    expect(screen.getByRole('button', { name: 'Compaction threshold mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Compaction threshold mode' })).toHaveTextContent('Custom');
+    expect(screen.getByRole('spinbutton', { name: 'Compaction threshold tokens' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'Compaction threshold tokens' })).toHaveValue(42_000);
 
     fireEvent.click(screen.getByRole('switch', { name: 'Context compaction' }));
     expect(onChange).toHaveBeenCalledWith({
@@ -496,6 +498,93 @@ describe('AgentConfigEditors', () => {
             trigger: { type: 'input_tokens', value: 42_000 },
           },
           largeToolResponse: { enabled: false },
+        },
+      },
+    });
+  });
+
+  it('enables a custom compaction threshold with a 50000-token default', () => {
+    const onChange = vi.fn();
+    render(
+      <SlotsProvider>
+        <AgentConfigEditors
+          editor="runtime"
+          spec={{ model: { name: 'openai/gpt' } }}
+          models={[]}
+          connectors={[]}
+          skills={[]}
+          loading={false}
+          error={null}
+          sandboxAvailable
+          onChange={onChange}
+          onClose={vi.fn()}
+        />
+      </SlotsProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Compaction threshold mode' })).toHaveTextContent('Auto');
+    expect(screen.getByText("Automatically trigger compaction at 80% of model's context window")).toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: 'Compaction threshold tokens' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compaction threshold mode' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Custom' }));
+    expect(onChange).toHaveBeenCalledWith({
+      model: { name: 'openai/gpt' },
+      config: {
+        contextManagement: {
+          compaction: {
+            enabled: true,
+            trigger: { type: 'input_tokens', value: 50_000 },
+          },
+          largeToolResponse: { enabled: true },
+        },
+      },
+    });
+  });
+
+  it('clears the compaction trigger when the threshold mode is set to Auto', () => {
+    const spec: AgentSpec = {
+      model: { name: 'openai/gpt' },
+      config: {
+        contextManagement: {
+          compaction: {
+            enabled: true,
+            trigger: { type: 'input_tokens', value: 42_000 },
+          },
+          largeToolResponse: { enabled: true },
+        },
+      },
+    };
+    const onChange = vi.fn();
+    render(
+      <SlotsProvider>
+        <AgentConfigEditors
+          editor="runtime"
+          spec={spec}
+          models={[]}
+          connectors={[]}
+          skills={[]}
+          loading={false}
+          error={null}
+          sandboxAvailable
+          onChange={onChange}
+          onClose={vi.fn()}
+        />
+      </SlotsProvider>,
+    );
+
+    expect(screen.getByRole('spinbutton', { name: 'Compaction threshold tokens' })).toHaveValue(42_000);
+    expect(screen.getByText('Trigger compaction when input reaches 42,000 tokens')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compaction threshold mode' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Auto' }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...spec,
+      config: {
+        ...spec.config,
+        contextManagement: {
+          compaction: { enabled: true },
+          largeToolResponse: { enabled: true },
         },
       },
     });
@@ -1206,9 +1295,91 @@ describe('AgentConfigEditors', () => {
     await waitFor(() => expect(loadMcpTools).toHaveBeenLastCalledWith('github'));
     rendered.rerender(renderEditors(slackSpec));
 
-    expect(loadMcpTools).toHaveBeenLastCalledWith('github');
+    expect(screen.getByRole('button', { name: 'GitHub' })).toHaveAttribute('aria-current', 'true');
     expect(screen.getAllByRole('menuitemcheckbox', { name: /issues.list/ }).length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Slack selected')).toBeInTheDocument();
+  });
+
+  it('relists tools for a selected MCP whose background listing was cancelled', async () => {
+    const slackPending = deferred<{ id: string; name: string }[]>();
+    const loadMcpTools = vi.fn(async (connectorId: string) =>
+      connectorId === 'slack' ? slackPending.promise : [{ id: 'issues.list', name: 'issues.list' }],
+    );
+    const renderEditors = () => (
+      <SlotsProvider>
+        <AgentConfigEditors
+          editor="mcp"
+          spec={{
+            model: { name: 'openai/gpt' },
+            mcpServers: [
+              { id: 'github', name: 'GitHub', enableTools: ['@all'] },
+              { id: 'slack', name: 'Slack', enableTools: ['@all'] },
+            ],
+          }}
+          models={[]}
+          connectors={[
+            { id: 'github', name: 'GitHub', authenticated: true },
+            { id: 'slack', name: 'Slack', authenticated: true },
+          ]}
+          skills={[]}
+          loading={false}
+          error={null}
+          loadMcpTools={loadMcpTools}
+          onChange={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </SlotsProvider>
+    );
+    const rendered = render(renderEditors());
+
+    await waitFor(() => expect(loadMcpTools).toHaveBeenCalledWith('slack'));
+    rendered.rerender(renderEditors());
+
+    await waitFor(() => expect(loadMcpTools.mock.calls.filter(([id]) => id === 'slack')).toHaveLength(2));
+    await act(async () => {
+      slackPending.resolve([{ id: 'messages.list', name: 'messages.list' }]);
+    });
+  });
+
+  it('retries a background tool listing that failed', async () => {
+    const loadMcpTools = vi.fn(async (connectorId: string) => {
+      if (connectorId !== 'slack') return [{ id: 'issues.list', name: 'issues.list' }];
+      if (loadMcpTools.mock.calls.filter(([id]) => id === 'slack').length === 1) {
+        throw new Error('Slack is unreachable');
+      }
+      return [{ id: 'messages.list', name: 'messages.list' }];
+    });
+    const renderEditors = () => (
+      <SlotsProvider>
+        <AgentConfigEditors
+          editor="mcp"
+          spec={{
+            model: { name: 'openai/gpt' },
+            mcpServers: [
+              { id: 'github', name: 'GitHub', enableTools: ['@all'] },
+              { id: 'slack', name: 'Slack', enableTools: ['@all'] },
+            ],
+          }}
+          models={[]}
+          connectors={[
+            { id: 'github', name: 'GitHub', authenticated: true },
+            { id: 'slack', name: 'Slack', authenticated: true },
+          ]}
+          skills={[]}
+          loading={false}
+          error={null}
+          loadMcpTools={loadMcpTools}
+          onChange={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </SlotsProvider>
+    );
+    const rendered = render(renderEditors());
+
+    await waitFor(() => expect(loadMcpTools).toHaveBeenCalledWith('slack'));
+    rendered.rerender(renderEditors());
+
+    await waitFor(() => expect(loadMcpTools.mock.calls.filter(([id]) => id === 'slack')).toHaveLength(2));
   });
 
   it('enables sandbox when a skill is added', () => {

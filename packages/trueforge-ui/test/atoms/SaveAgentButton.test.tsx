@@ -10,7 +10,13 @@ import {
 } from '@/atoms/draft/AgentConfigInstructionsContext.js';
 import { ServerProvider } from '@/server/ServerContext.js';
 import { ShellModeProvider, useShellMode, type AgentConfig } from '@/server/ShellModeContext.js';
-import type { AgentSpec, AgentUIServer, SaveAgentRequest, SaveAgentResult } from '@/server/types.js';
+import type {
+  AgentSpec,
+  AgentUIServer,
+  ListPermissionsResponse,
+  SaveAgentRequest,
+  SaveAgentResult,
+} from '@/server/types.js';
 import { SlotsProvider } from '@/theme/SlotsProvider.js';
 import { createMockAgentUIServer } from '../server/mockServer.js';
 
@@ -19,11 +25,11 @@ const flushAgentSpec = vi.fn(async () => undefined);
 const adoptAgentSpec = vi.fn();
 const updateAgentSpec = vi.fn();
 
-vi.mock('@truefoundry/assistant-ui-runtime', () => ({
-  useTrueFoundryAgentSpec: () => ({ agentSpec, draftSessionId: 'draft-1' }),
-  useTrueFoundryFlushAgentSpec: () => flushAgentSpec,
-  useTrueFoundryAdoptAgentSpec: () => adoptAgentSpec,
-  useTrueFoundryUpdateAgentSpec: () => updateAgentSpec,
+vi.mock('@truefoundry/trueforge-assistant-ui-runtime', () => ({
+  useTrueForgeAgentSpec: () => ({ agentSpec, draftSessionId: 'draft-1' }),
+  useTrueForgeFlushAgentSpec: () => flushAgentSpec,
+  useTrueForgeAdoptAgentSpec: () => adoptAgentSpec,
+  useTrueForgeUpdateAgentSpec: () => updateAgentSpec,
 }));
 
 beforeAll(() => {
@@ -122,6 +128,20 @@ function BoundMutableSaveButton({
       agentSpec,
     });
   }, [agentId, agentName, description, selectLibraryAgent]);
+  return <SaveAgentButton />;
+}
+
+function CloneDraftSaveButton({ agentName, description }: { agentName: string; description?: string }) {
+  const { selectLibraryAgent } = useShellMode();
+  useEffect(() => {
+    selectLibraryAgent({
+      isMutable: true,
+      isCreateAgent: true,
+      agentName,
+      ...(description === undefined ? {} : { description }),
+      agentSpec,
+    });
+  }, [agentName, description, selectLibraryAgent]);
   return <SaveAgentButton />;
 }
 
@@ -353,6 +373,26 @@ describe('SaveAgentButton', () => {
     );
   });
 
+  it('treats a named create draft (clone) as Save Agent create, not update', async () => {
+    const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'writer-clone-id' }));
+    renderButton({
+      saveAgent,
+      children: <CloneDraftSaveButton agentName="writer-clone" description="Writes docs." />,
+    });
+
+    const trigger = await screen.findByRole('button', { name: 'Save Agent' });
+    expect(screen.queryByRole('button', { name: 'Update Agent' })).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'Save agent' });
+    expect(within(dialog).getByLabelText('Agent name')).toHaveValue('writer-clone');
+    expect(within(dialog).getByLabelText('Description')).toHaveValue('Writes docs.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(saveAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'writer-clone', intent: 'create' })),
+    );
+  });
+
   it('discards drawer-only changes when closed', async () => {
     renderButton();
     fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
@@ -397,6 +437,8 @@ describe('SaveAgentButton', () => {
         updatedAt: '2026-08-12T08:00:00.000Z',
       }),
     );
+    expect(screen.getByRole('button', { name: 'Update Agent' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Agent' })).not.toBeInTheDocument();
   });
 
   it('preserves opaque mount fields without exposing resource editors', async () => {
@@ -519,5 +561,60 @@ describe('SaveAgentButton', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Update agent' });
     expect(within(dialog).getByLabelText('Agent name')).toHaveValue('writer');
     expect(within(dialog).getByLabelText('Description')).toHaveValue('Existing agent summary.');
+  });
+
+  it('enables Save Agent when tenant CREATE is granted', async () => {
+    renderButton({
+      serverOverrides: {
+        permissions: {
+          listPermissions: vi.fn(async (): Promise<ListPermissionsResponse> => ({
+            data: { type: 'tenant', permissions: { agent: ['CREATE'] } },
+          })),
+        },
+      },
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save Agent' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save Agent' }));
+    expect(await screen.findByRole('dialog', { name: 'Save agent' })).toBeInTheDocument();
+  });
+
+  it('disables Save Agent without tenant CREATE and shows a permission tooltip', async () => {
+    renderButton({
+      serverOverrides: {
+        permissions: {
+          listPermissions: vi.fn(async (): Promise<ListPermissionsResponse> => ({
+            data: { type: 'tenant', permissions: { agent: [] } },
+          })),
+        },
+      },
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save Agent' })).toBeDisabled());
+    const trigger = screen.getByRole('button', { name: 'Save Agent' });
+    fireEvent.mouseEnter(trigger.parentElement ?? trigger);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('No permission to create agents');
+  });
+
+  it('keeps Update Agent enabled for MANAGE without tenant CREATE', async () => {
+    const saveAgent = vi.fn(async (): Promise<SaveAgentResult> => ({ agentId: 'writer' }));
+    renderButton({
+      saveAgent,
+      children: <BoundMutableSaveButton agentId="writer" agentName="writer" description="Writes docs." />,
+      serverOverrides: {
+        permissions: {
+          listPermissions: vi.fn(async ({ resourceType }): Promise<ListPermissionsResponse> =>
+            resourceType === 'tenant'
+              ? { data: { type: 'tenant', permissions: { agent: [] } } }
+              : { data: { type: 'agent', permissions: { writer: ['MANAGE'] } } },
+          ),
+        },
+      },
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update Agent' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Update Agent' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Update agent' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(saveAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'writer', intent: 'update' })),
+    );
   });
 });

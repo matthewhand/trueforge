@@ -13,15 +13,18 @@ import {
 import { HTTPException } from 'hono/http-exception';
 import { join } from 'node:path';
 import type { Logger } from 'winston';
-import configuration from '../config';
+import { z } from 'zod';
+import configuration, { isTrueFoundryModeEnabled } from '../config';
 import type { IMcpServerStore, IMcpServerWithAuthStore } from '../db/mcpServerStore';
 import type { IModelProviderStore } from '../db/modelProviderStore';
 import type { ISandboxProviderStore } from '../db/sandboxProviderStore';
 import type { ISkillStore } from '../db/skillStore';
+import type { IWebSearchProviderStore } from '../db/webSearchProviderStore';
 import { LocalSandboxProvider } from '../sandbox/local/provider/LocalSandboxProvider';
 import { getCachedLocalSandboxSupport, isLocalSandboxFallbackEnabled } from '../sandbox/localRuntime';
 import { toSandboxProviderFromRecord } from '../sandbox/providerUtils';
 import type { ReasoningEffort } from '../schemas/modelProvider';
+import { hasConfiguredWebSearchProvider } from '../websearch/providers';
 
 export interface McpConnection {
   url: string;
@@ -33,6 +36,27 @@ export const X_TFY_METADATA = 'x-tfy-metadata';
 
 /** Prefix for harness-owned keys */
 export const TFG_METADATA_PREFIX = 'tfg';
+
+const GatewayMetadataSchema = z.record(z.string().min(1), z.string());
+
+/**
+ * Parse inbound `x-tfy-metadata`. Rejects malformed values rather than dropping them.
+ */
+export function parseGatewayMetadataHeader(raw: string): Record<string, string> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch (error) {
+    throw new HTTPException(400, { message: `${X_TFY_METADATA} must be a JSON object`, cause: error });
+  }
+  const parsed = GatewayMetadataSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new HTTPException(400, {
+      message: `${X_TFY_METADATA} must be a JSON object of string values`,
+    });
+  }
+  return parsed.data;
+}
 
 export function buildGatewayMetadata(input: { session: SessionHandle; turnId: string }): Record<string, string> {
   // Session.metadata is intentionally omitted for now (Unicode-in-header risk); re-add later.
@@ -50,11 +74,38 @@ export function buildGatewayMetadata(input: { session: SessionHandle; turnId: st
   return metadata;
 }
 
+/** Caller requestMetadata first; harness tfg.* always win */
+export function mergeGatewayMetadata(input: {
+  session: SessionHandle;
+  turnId: string;
+  requestMetadata?: Record<string, string> | undefined;
+}): Record<string, string> {
+  return {
+    ...input.requestMetadata,
+    ...buildGatewayMetadata({ session: input.session, turnId: input.turnId }),
+  };
+}
+
 export function gatewayMetadataHeaders(metadata: Record<string, string>): Record<string, string> {
   if (Object.keys(metadata).length === 0) {
     return {};
   }
   return { [X_TFY_METADATA]: JSON.stringify(metadata) };
+}
+
+/**
+ * Per-turn gateway headers for LLM/MCP calls: harness tfg.* stamps over caller
+ * metadata. Empty outside TrueFoundry mode. Every turn start must wire this in.
+ */
+export function gatewayTurnHeaders(input: {
+  session: SessionHandle;
+  turnId: string;
+  requestMetadata?: Record<string, string> | undefined;
+}): Record<string, string> {
+  if (!isTrueFoundryModeEnabled()) {
+    return {};
+  }
+  return gatewayMetadataHeaders(mergeGatewayMetadata(input));
 }
 
 /**
@@ -259,6 +310,7 @@ export async function validateAgentSpec({
   mcpServerStore,
   skillStore,
   sandboxProviderStore,
+  webSearchProviderStore,
 }: {
   spec: AgentSpec;
   tenant_id: string;
@@ -266,6 +318,7 @@ export async function validateAgentSpec({
   mcpServerStore: IMcpServerStore;
   skillStore: ISkillStore;
   sandboxProviderStore: ISandboxProviderStore;
+  webSearchProviderStore: IWebSearchProviderStore;
 }): Promise<void> {
   const resolved = await getModelDetails({
     tenant_id,
@@ -317,6 +370,15 @@ export async function validateAgentSpec({
         message: hasSkills
           ? 'skills require a sandbox provider — configure via PUT /settings/sandbox-providers'
           : 'sandbox is enabled but no sandbox provider is configured — PUT /settings/sandbox-providers',
+      });
+    }
+  }
+
+  if (spec.config.web_search.enabled) {
+    const hasProvider = await hasConfiguredWebSearchProvider({ tenant_id, store: webSearchProviderStore });
+    if (!hasProvider) {
+      throw new HTTPException(422, {
+        message: 'web_search is enabled but no web-search provider is configured',
       });
     }
   }

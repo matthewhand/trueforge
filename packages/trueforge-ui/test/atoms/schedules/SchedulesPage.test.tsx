@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SchedulesPage } from '@/atoms/schedules/SchedulesPage.js';
@@ -103,11 +103,18 @@ function renderPage(
 describe('SchedulesPage', () => {
   it('lists schedules in the table', async () => {
     const { scheduleServer, searchAgents } = renderPage();
-    expect(await screen.findByRole('heading', { name: 'Scheduled Agents' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Agent Schedules' })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText('daily-digest')).toBeInTheDocument();
     });
-    expect(screen.getAllByText('demo-agent').length).toBeGreaterThan(0);
+    expect(screen.getByRole('columnheader', { name: 'Schedule Name' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Task' })).toBeInTheDocument();
+    const task = screen.getByText('summarize');
+    fireEvent.mouseEnter(task);
+    expect(await screen.findByRole('tooltip', { name: 'summarize' })).toBeInTheDocument();
+    const scheduleNameCell = screen.getByText('daily-digest').closest('td');
+    if (scheduleNameCell == null) throw new Error('expected schedule name table cell');
+    expect(within(scheduleNameCell).getByText('demo-agent')).toBeInTheDocument();
     expect(screen.getByText('—')).toBeInTheDocument();
     expect(screen.getByText('Showing 1')).toBeInTheDocument();
     expect(scheduleServer.listSchedules).toHaveBeenCalledWith(expect.objectContaining({ limit: 10 }));
@@ -119,11 +126,13 @@ describe('SchedulesPage', () => {
     const { scheduleServer } = renderPage(sampleSchedules, {}, undefined, undefined, {
       agentId: 'demo-agent',
       permissions: {
-        listPermissions: vi.fn(async () => ({ data: { s1: [] } })),
+        listPermissions: vi.fn(async (): Promise<ListPermissionsResponse> => ({
+          data: { type: 'schedule', permissions: { s1: [] } },
+        })),
       },
     });
 
-    expect(await screen.findByRole('button', { name: 'Create Schedule' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'New Schedule' })).toBeDisabled();
     expect(await screen.findByRole('button', { name: 'Run now daily-digest' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Actions for daily-digest' }));
     await waitFor(() => {
@@ -140,26 +149,32 @@ describe('SchedulesPage', () => {
       agentId: 'demo-agent',
       permissions: {
         listPermissions: vi.fn(async ({ resourceType }): Promise<ListPermissionsResponse> => ({
-          data: resourceType === 'agent' ? { 'demo-agent': ['USE'] } : { s1: [] },
+          data:
+            resourceType === 'agent'
+              ? { type: 'agent', permissions: { 'demo-agent': ['USE'] } }
+              : { type: resourceType, permissions: { s1: [] } },
         })),
       },
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Create Schedule' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'New Schedule' })).toBeEnabled();
     });
     expect(screen.getByRole('button', { name: 'Run now daily-digest' })).toBeDisabled();
   });
 
   it('leaves Create enabled for All agents and gates USE when a specific agent is selected', async () => {
     const listPermissions = vi.fn(async ({ resourceType }): Promise<ListPermissionsResponse> => ({
-      data: resourceType === 'agent' ? { 'demo-agent': [] } : {},
+      data:
+        resourceType === 'agent'
+          ? { type: 'agent', permissions: { 'demo-agent': [] } }
+          : { type: resourceType, permissions: {} },
     }));
     renderPage(sampleSchedules, {}, undefined, undefined, {
       permissions: { listPermissions },
     });
 
-    expect(await screen.findByRole('button', { name: 'Create Schedule' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'New Schedule' })).toBeEnabled();
     expect(listPermissions).not.toHaveBeenCalledWith(
       expect.objectContaining({ resourceType: 'agent', resourceIds: expect.arrayContaining(['demo-agent']) }),
     );
@@ -173,7 +188,7 @@ describe('SchedulesPage', () => {
         resourceType: 'agent',
         resourceIds: ['demo-agent'],
       });
-      expect(screen.getByRole('button', { name: 'Create Schedule' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'New Schedule' })).toBeDisabled();
     });
   });
   it('locks embedded schedules to the supplied agent', async () => {
@@ -184,7 +199,7 @@ describe('SchedulesPage', () => {
         expect.objectContaining({ agentIds: ['demo-agent'], limit: 10 }),
       );
     });
-    expect(screen.queryByRole('heading', { name: 'Scheduled Agents' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Agent Schedules' })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Filter by agent' })).not.toBeInTheDocument();
   });
 
@@ -312,6 +327,7 @@ describe('SchedulesPage', () => {
           name: 'sched-123',
           scheduledFor: '2024-06-01T10:00:00.000Z',
           status: 'failed',
+          reason: 'The agent service rejected the scheduled run.',
           triggeredAt: '2024-06-01T10:00:01.000Z',
           triggeredBy: 'alice',
         },
@@ -340,6 +356,8 @@ describe('SchedulesPage', () => {
       expect(screen.getByLabelText(/Failed run at/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/Triggered run at/i)).toBeInTheDocument();
     });
+    fireEvent.mouseEnter(screen.getByLabelText(/Failed run at/i));
+    expect(await screen.findByText('Reason: The agent service rejected the scheduled run.')).toBeInTheDocument();
   });
 
   it('runs a schedule now from the table actions', async () => {

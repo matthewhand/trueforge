@@ -88,6 +88,7 @@ function toUiSession(session: TrueForgeApi.Session): HarnessUiSession {
     id: session.id,
     isMutable: session.agent.type === 'inline',
     isCreateAgent: readSessionIsCreateAgent(session.metadata),
+    shared: session.shared,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     ...(session.title === null ? {} : { title: session.title }),
@@ -129,9 +130,13 @@ export interface HarnessPageSource<T> {
 
 export function toListResult<TSource, TResult>(
   page: HarnessPageSource<TSource>,
-  map: (item: TSource) => TResult,
+  map: (item: TSource) => TResult | undefined,
 ): ListResult<TResult> {
-  const data = page.data.map(map);
+  const data: TResult[] = [];
+  for (const item of page.data) {
+    const mapped = map(item);
+    if (mapped !== undefined) data.push(mapped);
+  }
   const token = page.response.pagination.nextPageToken;
   return {
     data,
@@ -214,11 +219,18 @@ export function createHarnessChatServer(
       await client.sessions.delete(sessionId);
     },
 
-    async updateSession({ sessionId, agentSpec }) {
+    async renameSession({ sessionId, title }) {
+      await client.sessions.update(sessionId, { title });
+    },
+
+    async updateSession({ sessionId, agentSpec, title, shared }) {
       // Named (reference) sessions reject agent updates server-side.
-      const response = await client.sessions.update(sessionId, {
+      const body: TrueForgeApi.UpdateSessionRequest = {
         ...(agentSpec === undefined ? {} : { agent: { spec: toHarnessAgentSpec(agentSpec) } }),
-      });
+        ...(title === undefined ? {} : { title }),
+        ...(shared === undefined ? {} : { shared }),
+      };
+      const response = await client.sessions.update(sessionId, body);
       return toUiSession(response.data);
     },
 
@@ -237,10 +249,13 @@ export function createHarnessChatServer(
       });
       let fallbackSequence = 0;
       for await (const item of stream.withMetadata()) {
-        yield {
-          sequenceNumber: sequenceNumber(item.id, fallbackSequence),
-          event: toUiStreamingEvent(item.data),
-        };
+        const event = toUiStreamingEvent(item.data);
+        if (event !== undefined) {
+          yield {
+            sequenceNumber: sequenceNumber(item.id, fallbackSequence),
+            event,
+          };
+        }
         fallbackSequence += 1;
       }
     },
@@ -260,10 +275,13 @@ export function createHarnessChatServer(
       });
       let fallbackSequence = 0;
       for await (const item of stream.withMetadata()) {
-        yield {
-          sequenceNumber: sequenceNumber(item.id, fallbackSequence),
-          event: toUiStreamingEvent(item.data),
-        };
+        const event = toUiStreamingEvent(item.data);
+        if (event !== undefined) {
+          yield {
+            sequenceNumber: sequenceNumber(item.id, fallbackSequence),
+            event,
+          };
+        }
         fallbackSequence += 1;
       }
     },

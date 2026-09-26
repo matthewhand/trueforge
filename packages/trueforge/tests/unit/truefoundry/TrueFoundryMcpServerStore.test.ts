@@ -1,6 +1,5 @@
 import { AgentSpecSchema } from '@truefoundry/trueforge-core/agent-session';
 import { createLogger } from 'winston';
-import { getPublicBaseUrl } from '../../../src/config';
 import type { AgentRecord } from '../../../src/db/agentStore';
 import { McpServerNotFoundError, type McpServerRecord } from '../../../src/db/mcpServerStore';
 import { createTrueFoundryRequestContext } from '../../../src/truefoundry/accessToken';
@@ -15,6 +14,7 @@ const TENANT = 'default';
 const ACCESS_TOKEN = 'caller-access-token';
 const SUBJECT_TOKEN = 'subject-token';
 const ACTOR_TOKEN = 'actor-token';
+const PUBLIC_BASE_URL = 'https://tenant.example.com';
 
 const AGENT: AgentRecord = {
   id: 'agent-1',
@@ -52,6 +52,7 @@ function createMockClient(): MockClient {
     getMcpAuthStatus: jest.fn(),
     deleteMcpAuth: jest.fn(),
     vendToken: jest.fn(),
+    getTenantControlPlaneUrl: jest.fn(),
   };
 }
 
@@ -60,6 +61,7 @@ function createStore(input?: {
   client?: MockClient;
   subject?: { id: string; type: string; display_name: string };
   agent?: AgentRecord;
+  controlPlaneUrl?: string;
 }) {
   const client = input?.client ?? createMockClient();
   client.getMcpServerByName.mockResolvedValue(SFY_ROW);
@@ -68,6 +70,7 @@ function createStore(input?: {
   client.getMcpAuthorize.mockResolvedValue({ status: 'authenticated' });
   client.getMcpAuthStatus.mockResolvedValue({ status: 'authenticated' });
   client.deleteMcpAuth.mockResolvedValue(undefined);
+  client.getTenantControlPlaneUrl.mockResolvedValue(input?.controlPlaneUrl ?? PUBLIC_BASE_URL);
   if (input?.agent !== undefined) {
     client.vendToken.mockResolvedValue({ subjectToken: SUBJECT_TOKEN, actorToken: ACTOR_TOKEN });
   }
@@ -121,9 +124,18 @@ function truefoundryRecordWithoutAuth(overrides: { name?: string; id?: string } 
 }
 
 describe('resolveAuthorizeRedirectURL', () => {
-  it('builds an absolute FE landing from return_to', () => {
-    const returnTo = '/?screenType=mcp-auth&pUid=popup-1';
-    expect(resolveAuthorizeRedirectURL({ returnTo })).toBe(new URL(returnTo, `${getPublicBaseUrl()}/`).href);
+  it('builds an absolute FE landing from return_to on the tenant public base URL origin', () => {
+    const returnTo = '/trueforge/?screenType=mcp-auth&pUid=popup-1';
+    expect(resolveAuthorizeRedirectURL({ returnTo, publicBaseUrl: PUBLIC_BASE_URL })).toBe(
+      `${PUBLIC_BASE_URL}${returnTo}`,
+    );
+  });
+
+  it('keeps path and query from return_to on the session origin', () => {
+    const returnTo = '/trueforge/sessions/abc?screenType=mcp-auth&pUid=popup-1';
+    expect(resolveAuthorizeRedirectURL({ returnTo, publicBaseUrl: PUBLIC_BASE_URL })).toBe(
+      `${PUBLIC_BASE_URL}${returnTo}`,
+    );
   });
 });
 
@@ -148,14 +160,23 @@ describe('TrueFoundryMcpServerStore', () => {
   });
 
   describe('authorize', () => {
-    it('derives upstream redirectURL from return_to', async () => {
+    it('derives upstream redirectURL from return_to and tenant control-plane URL', async () => {
       const { store, client } = createStore();
-      const returnTo = '/?screenType=mcp-auth&pUid=popup-1';
+      const returnTo = '/trueforge/?screenType=mcp-auth&pUid=popup-1';
       await store.authorize({ tenant_id: TENANT, name: 'github', userRef: 'user-1', returnTo });
+      expect(client.getTenantControlPlaneUrl).toHaveBeenCalledWith({ tenantName: TENANT });
       expect(client.getMcpAuthorize).toHaveBeenCalledWith({
         accessToken: ACCESS_TOKEN,
         mcpServerId: 'mcp-id-1',
-        redirectURL: resolveAuthorizeRedirectURL({ returnTo }),
+        redirectURL: resolveAuthorizeRedirectURL({ returnTo, publicBaseUrl: PUBLIC_BASE_URL }),
+      });
+    });
+
+    it('throws when tenant control-plane URL is invalid', async () => {
+      const { store } = createStore({ controlPlaneUrl: '' });
+      await expect(store.authorize({ tenant_id: TENANT, name: 'github', userRef: 'user-1' })).rejects.toMatchObject({
+        message: 'Tenant control-plane URL is required for TrueFoundry MCP OAuth',
+        statusCode: 500,
       });
     });
 

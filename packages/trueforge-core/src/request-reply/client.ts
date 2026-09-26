@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import type { RedisClientType } from 'redis';
 import { NoResponderError, RequestTimeoutError } from './errors';
+import type { RedisClient } from './redisClient';
 import type { JSONReply, JSONValue, PublishedRequest, RequestEnvelope } from './types';
 import { jsonReplySchema } from './types';
 import { heartbeatKey, replyKey, requestChannel, sleep } from './utils';
@@ -28,7 +28,7 @@ function parseReplyPayload(raw: string) {
   return jsonReplySchema.parse(parsed);
 }
 
-async function getDelReply(redisClient: RedisClientType, rKey: string): Promise<JSONReply | null> {
+async function getDelReply(redisClient: RedisClient, rKey: string): Promise<JSONReply | null> {
   const raw = await redisClient.getDel(rKey);
   if (raw === null) {
     return null;
@@ -38,8 +38,8 @@ async function getDelReply(redisClient: RedisClientType, rKey: string): Promise<
 
 /**
  * Publishes the request (JSON) on the worker channel, then polls the reply key with GETDEL
- * (see https://redis.io/docs/latest/commands/getdel/ ) until a result arrives or the wait
- * budget is exceeded.
+ * (see https://redis.io/docs/latest/commands/getdel/ ) until a result arrives, the executor
+ * heartbeat expires, or the wait budget is exceeded.
  */
 export async function redisRequest<T extends JSONValue>({
   redis: redisClient,
@@ -48,7 +48,7 @@ export async function redisRequest<T extends JSONValue>({
   request,
   options,
 }: {
-  redis: RedisClientType;
+  redis: RedisClient;
   executorId: string;
   path: string;
   request: RequestEnvelope<T>;
@@ -81,6 +81,11 @@ export async function redisRequest<T extends JSONValue>({
     const replyPayload = await getDelReply(redisClient, rKey);
     if (replyPayload) {
       return replyPayload;
+    }
+    // We already checked that the executor was alive before sending, but it may have
+    // died while we wait. Recheck here so we fail soon instead of waiting until the timeout.
+    if ((await redisClient.exists(aliveK)) === 0) {
+      throw new NoResponderError(executorId);
     }
     if (performance.now() >= replyDeadline) {
       throw new RequestTimeoutError(replyTimeoutMs);

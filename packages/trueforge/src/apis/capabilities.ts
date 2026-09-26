@@ -5,10 +5,12 @@ import type { Logger } from 'winston';
 import { hasAdminRole, type ResolveRequestContext } from '../auth/identity';
 import type { ISandboxProviderStore } from '../db/sandboxProviderStore';
 import type { WithTransaction } from '../db/transaction';
+import type { IWebSearchProviderStore } from '../db/webSearchProviderStore';
 import { getCapabilitiesRoute } from '../routes/capabilityRoutes';
 import { isLocalSandboxFallbackEnabled } from '../sandbox/localRuntime';
 import { checkSnapshotStatus } from '../sandbox/providerUtils';
 import type { SandboxBuildStatus } from '../schemas/sandboxProvider';
+import { hasConfiguredWebSearchProvider } from '../websearch/providers';
 
 /**
  * Why skills are unavailable, keyed off the sandbox build status.
@@ -23,6 +25,7 @@ function skillDisabledReason(status: SandboxBuildStatus | undefined): string {
 
 export function createCapabilitiesRouter<TTransaction>(deps: {
   resolveSandboxProviderStore: (c: Context) => ISandboxProviderStore<TTransaction>;
+  resolveWebSearchProviderStore: (c: Context) => IWebSearchProviderStore<TTransaction>;
   withTransaction: WithTransaction<TTransaction>;
   logger: Logger;
   resolveRequestContext: ResolveRequestContext;
@@ -45,12 +48,17 @@ export function createCapabilitiesRouter<TTransaction>(deps: {
     }
     const sandboxEnabled = status === 'ready' || (status === undefined && isLocalSandboxFallbackEnabled());
     const settingsEnabled = hasAdminRole(requestContext);
+    const webSearchEnabled = await hasConfiguredWebSearchProvider({
+      tenant_id: requestContext.tenant_id,
+      store: deps.resolveWebSearchProviderStore(c),
+    });
     return c.json(
       {
         data: {
           sandbox: { enabled: sandboxEnabled },
           skill: sandboxEnabled ? { enabled: true } : { enabled: false, reason: skillDisabledReason(status) },
           settings: { enabled: settingsEnabled },
+          web_search: { enabled: webSearchEnabled },
         },
       },
       200,

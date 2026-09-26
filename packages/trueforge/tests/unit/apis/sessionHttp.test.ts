@@ -3,14 +3,17 @@ import { AgentSpecSchema, Sessions } from '@truefoundry/trueforge-core/agent-ses
 import { RequestReplyRouter } from '@truefoundry/trueforge-core/request-reply';
 import { createClient } from 'redis';
 import { createLogger } from 'winston';
+import { makeCreateTurnInput } from '../../../../trueforge-core/tests/agent-session/testHelpers';
 import { createInternalMetricsRouter } from '../../../src/apis/sessionMetrics';
 import {
   createInternalSessionsRouter,
   createSessionsRouter,
   type SessionsRouterDeps,
 } from '../../../src/apis/sessions';
+import { createTurnsRouter } from '../../../src/apis/turns';
 import { TrueForgeAuthorizer, type Authorizer } from '../../../src/auth/authorizer';
 import { STANDALONE_REQUEST_CONTEXT } from '../../../src/auth/identity';
+import { McpServerWithAuthStore } from '../../../src/db/McpServerWithAuthStore';
 import { migrateSqliteToLatest } from '../../../src/db/migrateSqlite';
 import { SqliteAgentStore } from '../../../src/db/sqlite/agent-store/SqliteAgentStore';
 import { createSqliteDb } from '../../../src/db/sqlite/client';
@@ -20,7 +23,10 @@ import { SqliteSandboxProviderStore } from '../../../src/db/sqlite/sandbox-provi
 import { SqliteSessionMetricsStore } from '../../../src/db/sqlite/session-metrics/SqliteSessionMetricsStore';
 import { SqliteSessionStore } from '../../../src/db/sqlite/session-store/SqliteSessionStore';
 import { SqliteSkillStore } from '../../../src/db/sqlite/skill-store/SqliteSkillStore';
+import { SqliteOAuthTokenStore } from '../../../src/db/sqlite/token-store/SqliteOAuthTokenStore';
+import { SqliteWebSearchProviderStore } from '../../../src/db/sqlite/web-search-provider-store/SqliteWebSearchProviderStore';
 import { ActiveTurnRegistry } from '../../../src/runtime/activeTurns';
+import { EventSubscriptionRegistry } from '../../../src/runtime/event-subscription/index.js';
 import { ListSessionsResponseSchema } from '../../../src/schemas/session';
 import {
   GetSessionMetricsChartDataResponseSchema,
@@ -45,7 +51,10 @@ const deniedCanAccessAgent = jest.fn((_input: Parameters<Authorizer['canAccessAg
 const denyAllAuthorizer: Authorizer = {
   listAgentAccess: () => Promise.resolve({ kind: 'agent_external_ids', agent_external_ids: [] }),
   canAccessAgent: deniedCanAccessAgent,
-  getPermissions: async ({ resourceIds }) => Object.fromEntries(resourceIds.map(id => [id, []])),
+  getPermissions: async ({ resourceType, resourceIds }) => ({
+    type: resourceType,
+    permissions: Object.fromEntries(resourceIds.map(id => [id, []])),
+  }),
 };
 
 describe('sessions HTTP agent binding', () => {
@@ -65,6 +74,7 @@ describe('sessions HTTP agent binding', () => {
     const mcpServerStore = new SqliteMcpServerStore(db);
     const skillStore = new SqliteSkillStore(db);
     const sandboxProviderStore = new SqliteSandboxProviderStore(db);
+    const webSearchProviderStore = new SqliteWebSearchProviderStore(db);
     agentStore = new SqliteAgentStore(db);
 
     await modelProviderStore.upsertProvider({
@@ -93,6 +103,7 @@ describe('sessions HTTP agent binding', () => {
       resolveSkillStore: () => skillStore,
       resolveAgentStore: () => agentStore,
       resolveSandboxProviderStore: () => sandboxProviderStore,
+      resolveWebSearchProviderStore: () => webSearchProviderStore,
       redis: createClient(),
       requestReplyRouter: new RequestReplyRouter(),
       resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
@@ -102,6 +113,30 @@ describe('sessions HTTP agent binding', () => {
     sessionDeps = deps;
     app = new OpenAPIHono();
     app.route('/', createSessionsRouter(deps));
+    const tokenStore = new SqliteOAuthTokenStore(db);
+    app.route(
+      '/',
+      createTurnsRouter({
+        sessions,
+        sessionStore,
+        activeTurns: deps.activeTurns,
+        resolveModelProviderStore: () => modelProviderStore,
+        resolveMcpServerStore: () =>
+          new McpServerWithAuthStore({
+            store: mcpServerStore,
+            tokenStore,
+            clientName: 'test-client',
+          }),
+        resolveSkillStore: () => skillStore,
+        resolveAgentStore: () => agentStore,
+        eventSubscriptions: new EventSubscriptionRegistry(undefined),
+        resolveSandboxProviderStore: () => sandboxProviderStore,
+        resolveWebSearchProviderStore: () => webSearchProviderStore,
+        logger: deps.logger,
+        resolveRequestContext: deps.resolveRequestContext,
+        authorizer: deps.authorizer,
+      }),
+    );
     app.route('/api/internal/sessions', createInternalSessionsRouter(deps));
     app.route(
       '/api/internal/metrics',
@@ -268,7 +303,10 @@ describe('sessions HTTP agent binding', () => {
             : { kind: 'agent_external_ids', agent_external_ids: [] },
         ),
       canAccessAgent: () => Promise.resolve(false),
-      getPermissions: async ({ resourceIds }) => Object.fromEntries(resourceIds.map(id => [id, []])),
+      getPermissions: async ({ resourceType, resourceIds }) => ({
+        type: resourceType,
+        permissions: Object.fromEntries(resourceIds.map(id => [id, []])),
+      }),
     };
     const managerDeps = {
       ...sessionDeps,
@@ -414,8 +452,92 @@ describe('sessions HTTP agent binding', () => {
     expect(eventsForbidden.status).toBe(403);
     expect(await eventsForbidden.json()).toEqual(forbiddenBody);
 
+    const sendEventsForbidden = await app.request(
+      '/other-user-session/turns/any-turn/events',
+      jsonInit('POST', {
+        events: [
+          {
+            type: 'user.tool_approval',
+            thread_id: 'main',
+            tool_call_id: 'tc-1',
+            approval: { status: 'allow' },
+          },
+        ],
+      }),
+    );
+    expect(sendEventsForbidden.status).toBe(403);
+    expect(await sendEventsForbidden.json()).toEqual(forbiddenBody);
+
     const allowed = await app.request(`/${json.data.id}`);
     expect(allowed.status).toBe(200);
+  });
+
+  it('POST /sessions/{id}/turns/{turn_id}/events mints ids for events', async () => {
+    const created = await app.request('/', jsonInit('POST', { agent: { spec: inlineSpec } }));
+    expect(created.status).toBe(201);
+    const { data: session } = (await created.json()) as { data: { id: string } };
+    await sessionStore.createTurn(makeCreateTurnInput({ sessionId: session.id, turnId: 'tip-1' }));
+
+    const res = await app.request(
+      `/${session.id}/turns/tip-1/events`,
+      jsonInit('POST', {
+        events: [
+          {
+            type: 'user.tool_approval',
+            thread_id: 'main',
+            tool_call_id: 'tc-1',
+            approval: { status: 'allow' },
+          },
+          {
+            type: 'user.tool_approval_policy',
+            policies: [
+              {
+                server_name: 'github',
+                name: 'create_issue',
+                action: { type: 'allow_session' },
+              },
+            ],
+          },
+          {
+            type: 'user.mcp_auth_continue',
+          },
+        ],
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      data: Array<{
+        id: string;
+        created_at: string;
+        type: string;
+        thread_id?: string;
+        tool_call_id?: string;
+        approval?: { status: string };
+        policies?: unknown[];
+      }>;
+    };
+    expect(body.data).toHaveLength(3);
+    expect(body.data[0]).toMatchObject({
+      type: 'user.tool_approval',
+      thread_id: 'main',
+      tool_call_id: 'tc-1',
+      approval: { status: 'allow' },
+    });
+    expect(body.data[0]?.id).toEqual(expect.any(String));
+    expect(body.data[0]?.created_at).toEqual(expect.any(String));
+    expect(body.data[1]).toMatchObject({
+      type: 'user.tool_approval_policy',
+      policies: [
+        {
+          server_name: 'github',
+          name: 'create_issue',
+          action: { type: 'allow_session' },
+        },
+      ],
+    });
+    expect(body.data[2]).toMatchObject({ type: 'user.mcp_auth_continue' });
+    expect(body.data[2]?.id).toEqual(expect.any(String));
+    expect(body.data[2]?.created_at).toEqual(expect.any(String));
   });
 
   it('rejects PATCH agent on a named session', async () => {
@@ -492,6 +614,66 @@ describe('sessions HTTP agent binding', () => {
     expect(omittedCreate.status).toBe(201);
     const omittedJson = (await omittedCreate.json()) as { data: { metadata: Record<string, string> } };
     expect(omittedJson.data.metadata).toEqual({});
+  });
+
+  it('PATCH title renames a session and omission preserves it', async () => {
+    const created = await app.request('/', jsonInit('POST', { agent: { spec: inlineSpec } }));
+    expect(created.status).toBe(201);
+    const { data } = (await created.json()) as { data: { id: string; title: string | null } };
+    expect(data.title).toBeNull();
+
+    const renamed = await app.request(`/${data.id}`, jsonInit('PATCH', { title: '  Acme onboarding  ' }));
+    expect(renamed.status).toBe(200);
+    const renamedJson = (await renamed.json()) as { data: { title: string | null } };
+    expect(renamedJson.data.title).toBe('Acme onboarding');
+
+    const omit = await app.request(`/${data.id}`, jsonInit('PATCH', {}));
+    expect(omit.status).toBe(200);
+    const omitJson = (await omit.json()) as { data: { title: string | null } };
+    expect(omitJson.data.title).toBe('Acme onboarding');
+
+    const got = await app.request(`/${data.id}`);
+    expect(got.status).toBe(200);
+    expect(((await got.json()) as { data: { title: string | null } }).data.title).toBe('Acme onboarding');
+  });
+
+  it('PATCH title works on named (reference) sessions', async () => {
+    const agent = await agentStore.createAgent({
+      tenant_id: 'default',
+      created_by_subject: {
+        subject_id: STANDALONE_REQUEST_CONTEXT.subject.id,
+        subject_type: STANDALONE_REQUEST_CONTEXT.subject.type,
+        subject_display_name: STANDALONE_REQUEST_CONTEXT.subject.display_name,
+      },
+      name: 'rename-agent',
+      description: 'Test agent.',
+      manifest: inlineSpec,
+      external_id: null,
+    });
+
+    const created = await app.request('/', jsonInit('POST', { agent: { name: agent.name } }));
+    expect(created.status).toBe(201);
+    const { data } = (await created.json()) as { data: { id: string } };
+
+    const renamed = await app.request(`/${data.id}`, jsonInit('PATCH', { title: 'Customer A support' }));
+    expect(renamed.status).toBe(200);
+    const renamedJson = (await renamed.json()) as {
+      data: { title: string | null; agent: { type: string } };
+    };
+    expect(renamedJson.data.title).toBe('Customer A support');
+    expect(renamedJson.data.agent.type).toBe('reference');
+  });
+
+  it('rejects blank or over-limit session titles on PATCH', async () => {
+    const created = await app.request('/', jsonInit('POST', { agent: { spec: inlineSpec } }));
+    expect(created.status).toBe(201);
+    const { data } = (await created.json()) as { data: { id: string } };
+
+    const blank = await app.request(`/${data.id}`, jsonInit('PATCH', { title: '   ' }));
+    expect(blank.status).toBe(400);
+
+    const tooLong = await app.request(`/${data.id}`, jsonInit('PATCH', { title: 'x'.repeat(51) }));
+    expect(tooLong.status).toBe(400);
   });
 
   it('rejects invalid session metadata on create', async () => {

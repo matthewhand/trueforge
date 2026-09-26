@@ -21,6 +21,7 @@ import { SqliteSessionStore } from '../../../src/db/sqlite/session-store/SqliteS
 import { SqliteSkillStore } from '../../../src/db/sqlite/skill-store/SqliteSkillStore';
 import { SqliteOAuthTokenStore } from '../../../src/db/sqlite/token-store/SqliteOAuthTokenStore';
 import type { Database } from '../../../src/db/sqlite/types';
+import { SqliteWebSearchProviderStore } from '../../../src/db/sqlite/web-search-provider-store/SqliteWebSearchProviderStore';
 import { ActiveTurnRegistry } from '../../../src/runtime/activeTurns';
 import { EventSubscriptionRegistry } from '../../../src/runtime/event-subscription/index.js';
 
@@ -75,6 +76,7 @@ describe('turns', () => {
           resolveAgentStore: () => new SqliteAgentStore(db),
           eventSubscriptions: new EventSubscriptionRegistry(undefined),
           resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
           logger: createLogger({ silent: true }),
           resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
           authorizer: new TrueForgeAuthorizer(),
@@ -104,6 +106,23 @@ describe('turns', () => {
       const eventsResponse = await app.request('/s1/turns/any-turn/events');
       expect(eventsResponse.status).toBe(403);
       expect(await eventsResponse.json()).toEqual(forbiddenAccess);
+
+      const createEventsResponse = await app.request('/s1/turns/any-turn/events', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          events: [
+            {
+              type: 'user.tool_approval',
+              thread_id: 'main',
+              tool_call_id: 'tc-1',
+              approval: { status: 'allow' },
+            },
+          ],
+        }),
+      });
+      expect(createEventsResponse.status).toBe(403);
+      expect(await createEventsResponse.json()).toEqual(forbiddenAccess);
 
       const subscribeResponse = await app.request('/s1/turns/any-turn/subscribe');
       expect(subscribeResponse.status).toBe(403);
@@ -152,6 +171,7 @@ describe('turns', () => {
           resolveAgentStore: () => agentStore,
           eventSubscriptions: new EventSubscriptionRegistry(undefined),
           resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
           logger: createLogger({ silent: true }),
           resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
           authorizer: {
@@ -162,7 +182,10 @@ describe('turns', () => {
                   : { kind: 'agent_external_ids', agent_external_ids: [] },
               ),
             canAccessAgent: () => Promise.resolve(false),
-            getPermissions: async ({ resourceIds }) => Object.fromEntries(resourceIds.map(id => [id, []])),
+            getPermissions: async ({ resourceType, resourceIds }) => ({
+              type: resourceType,
+              permissions: Object.fromEntries(resourceIds.map(id => [id, []])),
+            }),
           },
         }),
       );
@@ -187,6 +210,152 @@ describe('turns', () => {
           })
         ).status,
       ).toBe(403);
+      expect(
+        (
+          await app.request('/managed-session/turns/missing/events', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              events: [
+                {
+                  type: 'user.tool_approval',
+                  thread_id: 'main',
+                  tool_call_id: 'tc-1',
+                  approval: { status: 'allow' },
+                },
+              ],
+            }),
+          })
+        ).status,
+      ).toBe(403);
+    });
+
+    it('lets any tenant member read a shared session but keeps create, subscribe, and sandbox download creator-only', async () => {
+      const db = createSqliteDb(':memory:');
+      await migrateSqliteToLatest(db);
+      const sessionStore = new SqliteSessionStore(db);
+      await sessionStore.createSession({
+        tenant_id: 'default',
+        session_id: 'shared-session',
+        created_by_subject: { subject_id: 'someone-else', subject_type: 'user', subject_display_name: 'someone-else' },
+        agent: {
+          type: 'inline',
+          spec: AgentSpecSchema.parse({
+            model: { name: 'test-provider/test-model' },
+            instructions: 'test',
+          }),
+        },
+        custom: null,
+        metadata: {},
+        external_id: null,
+        source: null,
+      });
+      await sessionStore.updateSession({
+        tenant_id: 'default',
+        session_id: 'shared-session',
+        agent: undefined,
+        title: undefined,
+        metadata: undefined,
+        shared: true,
+      });
+
+      const app = new OpenAPIHono();
+      app.route(
+        '/',
+        createTurnsRouter({
+          sessions: new Sessions({ sessionStore }),
+          sessionStore,
+          activeTurns: new ActiveTurnRegistry(),
+          resolveModelProviderStore: () => new SqliteModelProviderStore(db),
+          resolveMcpServerStore: () => mcpServerStoreWithAuth(db, new SqliteOAuthTokenStore(db)),
+          resolveSkillStore: () => new SqliteSkillStore(db),
+          resolveAgentStore: () => new SqliteAgentStore(db),
+          eventSubscriptions: new EventSubscriptionRegistry(undefined),
+          resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
+          logger: createLogger({ silent: true }),
+          resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
+          authorizer: new TrueForgeAuthorizer(),
+        }),
+      );
+
+      expect((await app.request('/shared-session/turns')).status).toBe(200);
+      expect((await app.request('/shared-session/turns/missing')).status).toBe(404);
+      expect((await app.request('/shared-session/turns/missing/events')).status).toBe(404);
+      expect((await app.request('/shared-session/turns/missing/subscribe')).status).toBe(403);
+      expect(
+        (
+          await app.request(
+            `/shared-session/turns/missing/download-sandbox-file?path=${encodeURIComponent('/workspace/file.txt')}`,
+          )
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await app.request('/shared-session/turns', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ stream: false }),
+          })
+        ).status,
+      ).toBe(403);
+    });
+  });
+
+  describe('create turn x-tfy-metadata', () => {
+    it('rejects a malformed header before starting the turn', async () => {
+      const db = createSqliteDb(':memory:');
+      await migrateSqliteToLatest(db);
+      const sessionStore = new SqliteSessionStore(db);
+      const sessions = new Sessions({ sessionStore });
+      await sessionStore.createSession({
+        tenant_id: 'default',
+        session_id: 's1',
+        created_by_subject: {
+          subject_id: STANDALONE_REQUEST_CONTEXT.subject.id,
+          subject_type: STANDALONE_REQUEST_CONTEXT.subject.type,
+          subject_display_name: STANDALONE_REQUEST_CONTEXT.subject.display_name,
+        },
+        agent: {
+          type: 'inline',
+          spec: AgentSpecSchema.parse({
+            model: { name: 'test-provider/test-model' },
+            instructions: 'test',
+          }),
+        },
+        custom: null,
+        metadata: {},
+        external_id: null,
+        source: null,
+      });
+
+      const app = new OpenAPIHono();
+      app.route(
+        '/',
+        createTurnsRouter({
+          sessions,
+          sessionStore,
+          activeTurns: new ActiveTurnRegistry(),
+          resolveModelProviderStore: () => new SqliteModelProviderStore(db),
+          resolveMcpServerStore: () => mcpServerStoreWithAuth(db, new SqliteOAuthTokenStore(db)),
+          resolveSkillStore: () => new SqliteSkillStore(db),
+          resolveAgentStore: () => new SqliteAgentStore(db),
+          eventSubscriptions: new EventSubscriptionRegistry(undefined),
+          resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
+          logger: createLogger({ silent: true }),
+          resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
+          authorizer: new TrueForgeAuthorizer(),
+        }),
+      );
+
+      const response = await app.request('/s1/turns', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-tfy-metadata': 'not-json' },
+        body: JSON.stringify({ stream: false }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain('x-tfy-metadata must be a JSON object');
     });
   });
 
@@ -280,6 +449,7 @@ describe('turns', () => {
           resolveSkillStore: () => new SqliteSkillStore(db),
           eventSubscriptions,
           resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
           logger,
           resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
           authorizer: new TrueForgeAuthorizer(),
@@ -387,6 +557,7 @@ describe('turns', () => {
           resolveAgentStore: () => new SqliteAgentStore(db),
           eventSubscriptions: new EventSubscriptionRegistry(undefined),
           resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
           logger,
           resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
           authorizer: new TrueForgeAuthorizer(),
@@ -417,7 +588,10 @@ describe('turns', () => {
     const denyAllAuthorizer: Authorizer = {
       listAgentAccess: () => Promise.resolve({ kind: 'agent_external_ids', agent_external_ids: [] }),
       canAccessAgent: deniedCanAccessAgent,
-      getPermissions: async ({ resourceIds }) => Object.fromEntries(resourceIds.map(id => [id, []])),
+      getPermissions: async ({ resourceType, resourceIds }) => ({
+        type: resourceType,
+        permissions: Object.fromEntries(resourceIds.map(id => [id, []])),
+      }),
     };
 
     async function referencedAgentHarness(authorizer: Authorizer) {
@@ -469,6 +643,7 @@ describe('turns', () => {
           resolveAgentStore: () => agentStore,
           eventSubscriptions: new EventSubscriptionRegistry(undefined),
           resolveSandboxProviderStore: () => new SqliteSandboxProviderStore(db),
+          resolveWebSearchProviderStore: () => new SqliteWebSearchProviderStore(db),
           logger: createLogger({ silent: true }),
           resolveRequestContext: () => STANDALONE_REQUEST_CONTEXT,
           authorizer,

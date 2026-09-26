@@ -72,6 +72,7 @@ export interface CreateTurnTurnFields {
   first_turn_id: string;
   previous_turn_id: string | null;
   ancestor_ids: string[];
+  active_executor_id: string;
   input: TurnInputItem[];
   state: TurnState;
   custom: Record<string, unknown> | null;
@@ -152,7 +153,8 @@ async function addSessionCostAndDuration(
 function terminalTurnState(state: TurnState, turn_id: string): TerminalTurnState {
   switch (state.status) {
     case 'running':
-      throw new SessionStoreInvariantError(`expected terminal state for turn ${turn_id}, got running`);
+    case 'paused':
+      throw new SessionStoreInvariantError(`expected terminal state for turn ${turn_id}, got ${state.status}`);
     case 'done':
     case 'cancelled':
     case 'error':
@@ -344,6 +346,7 @@ async function assembleTurnRecord(
     first_turn_id: turn.first_turn_id,
     ancestor_ids: turn.ancestor_ids,
     previous_turn_id: turn.previous_turn_id,
+    active_executor_id: turn.active_executor_id,
     state: turn.state,
     input: turn.input,
     snapshot,
@@ -359,6 +362,7 @@ interface TurnInsertValues {
   first_turn_id: string;
   previous_turn_id: string | null;
   ancestor_ids: string[];
+  active_executor_id: string;
   input: RawBuilder<CreateTurnInput['turn']['input']>;
   state: CreateTurnInput['turn']['state'];
   checkpoint: TurnCheckpoint;
@@ -515,6 +519,7 @@ export async function createTurn(db: Kysely<Database>, input: CreateTurnInput): 
         first_turn_id: input.turn.first_turn_id,
         previous_turn_id: input.turn.previous_turn_id ?? null,
         ancestor_ids: input.turn.ancestor_ids,
+        active_executor_id: input.turn.active_executor_id,
         input: json(input.turn.input),
         state: input.turn.state,
         checkpoint,
@@ -726,6 +731,7 @@ export async function listTurns(db: Kysely<Database>, input: ListTurnsInput): Pr
     first_turn_id: row.first_turn_id,
     ancestor_ids: row.ancestor_ids,
     previous_turn_id: row.previous_turn_id,
+    active_executor_id: row.active_executor_id,
     state: row.state,
     input: row.input,
     created_at: row.created_at,

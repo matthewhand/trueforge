@@ -165,7 +165,7 @@ function SidebarRail({
       <SidebarNav />
       <footer className="flex shrink-0 flex-col items-center border-border p-2">
         <ShellActions labeled className="flex-col" />
-        <UserAvatar labeled className="mt-1" />
+        <UserAvatar labeled className="mt-2 py-1.5" />
       </footer>
     </aside>
   );
@@ -177,6 +177,7 @@ export function SidebarLayout({ className }: { className?: string }) {
   const AgentDetailsPage = useSlot('AgentDetailsPage');
   const AgentsLibrary = useSlot('AgentsLibrary');
   const SessionsPage = useSlot('SessionsPage');
+  const ShareChatButton = useSlot('ShareChatButton');
   const ClearChatButton = useSlot('ClearChatButton');
   const SaveAgentButton = useSlot('SaveAgentButton');
   const SelectAgentEmptyState = useSlot('SelectAgentEmptyState');
@@ -264,6 +265,7 @@ export function SidebarLayout({ className }: { className?: string }) {
           end={
             !overlayOpen ? (
               <>
+                <ShareChatButton />
                 <ClearChatButton />
                 <SaveAgentButton />
               </>

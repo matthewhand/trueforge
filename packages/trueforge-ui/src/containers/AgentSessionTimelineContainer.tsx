@@ -1,9 +1,12 @@
 'use client';
 
 import { ThreadPrimitive, type ThreadMessageLike } from '@assistant-ui/react';
-import { convertTurnsToThreadMessages } from '@truefoundry/assistant-ui-runtime';
+import { convertTurnsToThreadMessages } from '@truefoundry/trueforge-assistant-ui-runtime';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 
+import { Markdown, type MarkdownProps } from '../atoms/Markdown.js';
+import { MessageActionBar } from '../atoms/MessageActionBar.js';
+import type { UserMessageActionBarProps } from '../atoms/UserMessageActionBar.js';
 import { useServer } from '../server/ServerContext.js';
 import type { AgentChatServer, SessionEventItem } from '../server/types.js';
 import type { SlotOverrides } from '../theme/SlotsProvider.js';
@@ -17,9 +20,25 @@ import { AssistantMessageContainer } from './AssistantMessageContainer.js';
 import { ReadOnlySessionTurnRuntime } from './ReadOnlySessionTurnRuntime.js';
 import { UserMessageContainer } from './UserMessageContainer.js';
 
+function ReadOnlyMarkdown(props: MarkdownProps) {
+  return (
+    <Markdown
+      {...props}
+      readOnly
+      onDownloadArtifact={undefined}
+      sandboxDownloadReadOnlyTooltip="Download File is not available in read-only mode"
+    />
+  );
+}
+
+/** Copy + timestamp only — edit/retry are not meaningful in session details. */
+function ReadOnlyUserMessageActionBar({ isCopied, onCopy, createdAt, className }: UserMessageActionBarProps) {
+  return <MessageActionBar isCopied={isCopied} onCopy={onCopy} createdAt={createdAt} className={className} />;
+}
+
 const READ_ONLY_SLOT_OVERRIDES: SlotOverrides = {
-  UserMessageActionBar: () => <></>,
-  MessageActionBar: () => <></>,
+  UserMessageActionBar: ReadOnlyUserMessageActionBar,
+  Markdown: ReadOnlyMarkdown,
 };
 
 type TurnCreatedEvent = Extract<SessionEventItem['event'], { type: 'turn.created' }>;
@@ -69,6 +88,7 @@ function applyTerminalState(messages: ThreadMessageLike[], turn: SessionTurnView
   // failures need an assistant row so the terminal state is visible.
   const assistantIndex = messages.findIndex(message => message.role === 'assistant');
   const assistant = assistantIndex < 0 ? undefined : messages[assistantIndex];
+  const createdAt = new Date(state.completedAt ?? turn.done?.createdAt ?? turn.created.createdAt);
   const terminal: ThreadMessageLike =
     state.status === 'error'
       ? {
@@ -76,7 +96,7 @@ function applyTerminalState(messages: ThreadMessageLike[], turn: SessionTurnView
             id: `${turn.turnId}-assistant`,
             role: 'assistant',
             content: [],
-            createdAt: new Date(turn.done?.createdAt ?? turn.created.createdAt),
+            createdAt,
             metadata: { custom: { turnId: turn.turnId } },
           }),
           status: { type: 'incomplete', reason: 'error', error: state.message },
@@ -86,7 +106,7 @@ function applyTerminalState(messages: ThreadMessageLike[], turn: SessionTurnView
             id: `${turn.turnId}-assistant`,
             role: 'assistant',
             content: [],
-            createdAt: new Date(turn.done?.createdAt ?? turn.created.createdAt),
+            createdAt,
             metadata: { custom: { turnId: turn.turnId } },
           }),
           content: appendTerminalText(assistant?.content ?? [], `Cancelled: ${state.reason}`),
@@ -105,6 +125,7 @@ function messagesForTurn(messages: ThreadMessageLike[], turn: SessionTurnView): 
 export type AgentSessionTimelineContainerProps = {
   sessionId: string;
   events: SessionEventItem[];
+  contentMaxWidth?: string;
   listMetrics?: {
     totalTurns: number;
     totalCostInUsd?: number;
@@ -112,7 +133,12 @@ export type AgentSessionTimelineContainerProps = {
   };
 };
 
-export function AgentSessionTimelineContainer({ sessionId, events, listMetrics }: AgentSessionTimelineContainerProps) {
+export function AgentSessionTimelineContainer({
+  sessionId,
+  events,
+  contentMaxWidth,
+  listMetrics,
+}: AgentSessionTimelineContainerProps) {
   const server = useServer();
   const AgentSessionTurnHeader = useSlot('AgentSessionTurnHeader');
   const AgentSessionEventTimeline = useSlot('AgentSessionEventTimeline');
@@ -187,14 +213,23 @@ export function AgentSessionTimelineContainer({ sessionId, events, listMetrics }
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border">
+    <div
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+      data-slot="agent-session-scroll"
+    >
+      <div className="sticky top-0 z-20 bg-primary-bg" data-slot="agent-session-metrics-sticky">
         <AgentSessionMetricsStrip metrics={sessionMetrics} />
+      </div>
+      <div className="border-b border-border">
         <Suspense fallback={null}>
           <AgentSessionEventTimeline turns={turnViews} segments={timelineSegments} onSelectTurn={handleSelectTurn} />
         </Suspense>
       </div>
-      <ThreadViewportShell className="flex-1 pb-4">
+      <ThreadViewportShell
+        scrollable={false}
+        className="pb-4"
+        {...(contentMaxWidth == null ? {} : { contentMaxWidth })}
+      >
         <div className="flex flex-col gap-4">
           {turnViews.map(turn => (
             <SessionTurnSection
