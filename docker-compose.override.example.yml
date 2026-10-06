@@ -51,13 +51,12 @@ services:
       # Keep the base file's host-port convention (8791) so URLs do not change
       # vs bridge mode and `pnpm dev` (8790) stays free on the host.
       PORT: 8791
-      # Under host networking there is no `postgres`/`redis` DNS name; the app
-      # config defaults (localhost:5432 / redis://localhost:6379) are correct.
+      # Under host networking there is no `postgres`/`redis` DNS name; point to
+      # loopback so the base-file compose DNS names are overridden.
       STANDALONE: 'false'
-      # POSTGRES_HOST/REDIS_URL intentionally NOT set: base-file values would
-      # override the .env/defaults with compose DNS names that do not resolve
-      # under host networking. PUBLIC_BASE_URL falls back to
-      # http://localhost:$PORT; uncomment to make MCP OAuth/OIDC callbacks work:
+      POSTGRES_HOST: 127.0.0.1
+      REDIS_URL: redis://127.0.0.1:6379
+      # PUBLIC_BASE_URL falls back to http://localhost:$PORT; uncomment to make MCP OAuth/OIDC callbacks work:
       # PUBLIC_BASE_URL: http://localhost:8790
 
   controller:
@@ -66,10 +65,10 @@ services:
     environment:
       NODE_ENV: production
       STANDALONE: 'false'
+      POSTGRES_HOST: 127.0.0.1
       # Base-file SERVER_URL (http://server:8790) does not resolve under host
-      # networking; localhost on the server's PORT (8791) is correct here.
-      SERVER_URL: http://localhost:8791
-      # Same as server: no POSTGRES_HOST override under host networking.
+      # networking; 127.0.0.1 on the server's PORT (8791) is correct here.
+      SERVER_URL: http://127.0.0.1:8791
 
 # ---------------------------------------------------------------------------
 # Other common deviations (edit the copied override, not this example):

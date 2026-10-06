@@ -144,6 +144,7 @@ never expose 8791 unauthenticated.
 
 - `!reset []` (used to drop the base `ports:` under host networking) needs
   Compose v2.24+.
-- The override intentionally does **not** set `POSTGRES_HOST`/`REDIS_URL`;
-  base-file compose DNS names do not resolve under host networking.
+- The override sets `POSTGRES_HOST`/`REDIS_URL` to `127.0.0.1` so the
+  base-file compose DNS names (`postgres`, `redis`) are properly overridden
+  under host networking.
 - `pnpm smoke` still exercises the upstream bridge-mode path unchanged.
