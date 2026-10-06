@@ -10,6 +10,7 @@ import { libraryAgentId } from '../../server/ShellModeContext.js';
 import type { Schedule, ScheduleRun, ScheduleStatus } from '../../server/types.js';
 import { useSlot } from '../../theme/SlotsProvider.js';
 import { hasCreatedBySubject } from '../../utils/createdBySubject.js';
+import { getErrorMessage } from '../../utils/getErrorMessage.js';
 import { readScheduleShareSearch, replaceScheduleShareSearch } from '../../utils/scheduleShareUrl.js';
 import { AgentSearchPicker } from '../AgentSearchPicker.js';
 import { CreatedByCell } from '../CreatedByCell.js';
@@ -188,7 +189,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
   const [pageSize, setPageSize] = useState(() => clampPageSize(DEFAULT_TABLE_PAGE_SIZE));
   const [pageToken, setPageToken] = useState<string | undefined>(undefined);
   const [nextPageToken, setNextPageToken] = useState<string | undefined>(undefined);
-  const [prevTokenStack, setPrevTokenStack] = useState<string[]>([]);
+  const [previousPageToken, setPreviousPageToken] = useState<string | undefined>(undefined);
   const loadGenRef = useRef(0);
   const didConsumeIsNewRef = useRef(false);
 
@@ -234,14 +235,15 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
         if (gen !== loadGenRef.current) return;
         setSchedules(page.data);
         setNextPageToken(page.nextPageToken);
+        setPreviousPageToken(page.previousPageToken);
         void loadRunsForSchedules({ rows: page.data, gen });
       } catch (caught) {
         if (gen !== loadGenRef.current) return;
-        const message = caught instanceof Error ? caught.message : 'Failed to load schedules';
-        setError(message);
+        setError(getErrorMessage(caught, 'Check your connection and try again.'));
         setSchedules([]);
         setRunsByScheduleId({});
         setNextPageToken(undefined);
+        setPreviousPageToken(undefined);
       } finally {
         if (gen === loadGenRef.current) setLoading(false);
       }
@@ -254,7 +256,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
       const size = next?.size ?? pageSize;
       const agentId = next?.agentId ?? agentFilter;
       setPageToken(undefined);
-      setPrevTokenStack([]);
+      setPreviousPageToken(undefined);
       void loadSchedules({ token: undefined, size, agentId });
     },
     [agentFilter, loadSchedules, pageSize],
@@ -274,7 +276,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
     setAgentFilter(current => {
       if (current === agentId) return current;
       setPageToken(undefined);
-      setPrevTokenStack([]);
+      setPreviousPageToken(undefined);
       return agentId;
     });
   }, [agentId]);
@@ -297,7 +299,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
         const nextAgentFilter = agentId ?? next.agentFilter;
         if (current === nextAgentFilter) return current;
         setPageToken(undefined);
-        setPrevTokenStack([]);
+        setPreviousPageToken(undefined);
         return nextAgentFilter;
       });
     };
@@ -323,7 +325,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
 
   // Key off page data, not client filters — filtering must not toggle the column.
   const showCreatedByColumn = hasCreatedBySubject(schedules);
-  const hasPageNav = prevTokenStack.length > 0 || nextPageToken != null;
+  const hasPageNav = previousPageToken != null || nextPageToken != null;
 
   const handleTogglePause = async (schedule: Schedule) => {
     if (!allows(schedule.id, 'MANAGE')) return;
@@ -368,16 +370,12 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
 
   const goNext = () => {
     if (nextPageToken == null) return;
-    setPrevTokenStack(stack => [...stack, pageToken ?? '']);
     setPageToken(nextPageToken);
   };
 
   const goPrev = () => {
-    if (prevTokenStack.length === 0) return;
-    const stack = [...prevTokenStack];
-    const prev = stack.pop();
-    setPrevTokenStack(stack);
-    setPageToken(prev === '' ? undefined : prev);
+    if (previousPageToken == null || previousPageToken === '') return;
+    setPageToken(previousPageToken);
   };
 
   return (
@@ -403,7 +401,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
                 onValueChange={value => {
                   setAgentFilter(value);
                   setPageToken(undefined);
-                  setPrevTokenStack([]);
+                  setPreviousPageToken(undefined);
                 }}
                 onAgentPicked={agent => {
                   setAgentLabelById(current => ({
@@ -435,7 +433,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+      <div className={cn('min-h-0 flex-1 overflow-auto px-4 py-4', error != null ? 'flex flex-col' : undefined)}>
         {loading ? (
           <div className="flex flex-col gap-2" role="status" aria-label="Loading schedules">
             {Array.from({ length: 5 }, (_, i) => (
@@ -443,7 +441,13 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
             ))}
           </div>
         ) : error != null ? (
-          <p className="text-failure-bg px-3 py-8 text-center text-sm">{error}</p>
+          <div role="alert" className="flex flex-1 flex-col items-center justify-center">
+            <EmptyScreen
+              title="Couldn't load schedules"
+              description={error}
+              className="h-auto min-h-0 flex-none py-0"
+            />
+          </div>
         ) : schedules.length === 0 ? (
           <EmptyScreen title="No Schedules Found" description="Create one to get started." className="min-h-full" />
         ) : filtered.length === 0 ? (
@@ -453,7 +457,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
               <TableTokenPagination
                 pageSize={pageSize}
                 rowCount={0}
-                canPrev={prevTokenStack.length > 0}
+                canPrev={previousPageToken != null}
                 canNext={nextPageToken != null}
                 onPrev={goPrev}
                 onNext={goNext}
@@ -462,7 +466,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
                   const next = clampPageSize(size);
                   setPageSize(next);
                   setPageToken(undefined);
-                  setPrevTokenStack([]);
+                  setPreviousPageToken(undefined);
                 }}
               />
             ) : null}
@@ -546,7 +550,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
               <TableTokenPagination
                 pageSize={pageSize}
                 rowCount={filtered.length}
-                canPrev={prevTokenStack.length > 0}
+                canPrev={previousPageToken != null}
                 canNext={nextPageToken != null}
                 onPrev={goPrev}
                 onNext={goNext}
@@ -555,7 +559,7 @@ export function SchedulesPage({ agentId }: SchedulesPageProps) {
                   const next = clampPageSize(size);
                   setPageSize(next);
                   setPageToken(undefined);
-                  setPrevTokenStack([]);
+                  setPreviousPageToken(undefined);
                 }}
               />
             )}

@@ -52,15 +52,20 @@ export function makeMockIMCPServer(params: {
     ),
     callTool: jest.fn(),
     toolCallInfo: jest.fn(),
+    setApprovalPolicy: jest.fn(),
+    getApprovalPolicies: jest.fn(() => ({})),
   };
 }
 
 export function makeStubPublicSandbox(): Sandbox {
+  const unsupportedOrgSecret = () => Promise.reject(new Error('test provider does not support org secrets'));
   const provider: SandboxProvider = {
     type: 'test',
-    buildImage: jest.fn(),
-    getImageBuildStatus: jest.fn(),
+    envSupported: false,
     createSandbox: jest.fn(),
+    createSecret: unsupportedOrgSecret,
+    updateSecret: unsupportedOrgSecret,
+    deleteSecret: unsupportedOrgSecret,
     exec: jest.fn(),
     getAdditionalInstructions: () => undefined,
     getToolResultDumpDir: () => '/tmp/tool-results',

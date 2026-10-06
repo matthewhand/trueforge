@@ -86,7 +86,7 @@ function renderPage(
     ...overrides,
   };
   const server = createMockAgentUIServer({
-    searchAgents: searchAgents ?? vi.fn(async () => [{ name: 'demo-agent', agentId: 'demo-agent' }]),
+    searchAgents: searchAgents ?? vi.fn(async () => ({ data: [{ name: 'demo-agent', agentId: 'demo-agent' }] })),
     schedules: scheduleServer,
     ...(options.permissions == null ? {} : { permissions: options.permissions }),
   });
@@ -120,6 +120,17 @@ describe('SchedulesPage', () => {
     expect(scheduleServer.listSchedules).toHaveBeenCalledWith(expect.objectContaining({ limit: 10 }));
     // Agent catalog loads only when the filter opens (infinite scroll), not on mount.
     expect(searchAgents).not.toHaveBeenCalled();
+  });
+
+  it('shows a friendly load error instead of raw fetch failures', async () => {
+    renderPage(sampleSchedules, {}, async () => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    expect(await screen.findByRole('heading', { name: "Couldn't load schedules" })).toBeInTheDocument();
+    expect(screen.getByText('Check your connection and try again.')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
   it('disables schedule mutations without MANAGE or DELETE', async () => {
@@ -221,6 +232,7 @@ describe('SchedulesPage', () => {
             name: 'weekly-digest',
           },
         ],
+        previousPageToken: 'page-1',
       });
     renderPage(sampleSchedules, {}, listSchedules);
 
@@ -231,6 +243,12 @@ describe('SchedulesPage', () => {
       expect(listSchedules).toHaveBeenLastCalledWith(expect.objectContaining({ pageToken: 'page-2', limit: 10 }));
     });
     expect(await screen.findByText('weekly-digest')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+    await waitFor(() => {
+      expect(listSchedules).toHaveBeenLastCalledWith(expect.objectContaining({ pageToken: 'page-1', limit: 10 }));
+    });
   });
 
   it('ignores run history returned for a stale schedules page', async () => {
@@ -463,12 +481,12 @@ describe('SchedulesPage', () => {
       { agentId: 'beta-agent', name: 'beta-agent' },
     ];
     const searchAgents = vi.fn(
-      async ({ query, limit = 50, offset = 0 }: { query?: string; limit?: number; offset?: number } = {}) => {
+      async ({ query, limit = 50 }: { query?: string; limit?: number; pageToken?: string } = {}) => {
         const matched =
           query == null || query === ''
             ? agents
             : agents.filter(agent => agent.name.toLowerCase().includes(query.toLowerCase()));
-        return matched.slice(offset, offset + limit);
+        return { data: matched.slice(0, limit) };
       },
     );
     renderPage(sampleSchedules, {}, undefined, searchAgents);

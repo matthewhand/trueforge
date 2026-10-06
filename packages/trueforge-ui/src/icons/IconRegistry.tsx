@@ -46,7 +46,9 @@ import {
   Menu,
   MessageSquareText,
   Minimize2,
+  Monitor,
   Moon,
+  PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
@@ -55,6 +57,7 @@ import {
   Play,
   Plug,
   Plus,
+  RefreshCw,
   RotateCw,
   Save,
   Search,
@@ -140,6 +143,7 @@ const defaults: Record<string, IconEntry> = {
   'grip-vertical': GripVertical,
   'square-pen': SquarePen,
   'rotate-right': RotateCw,
+  'refresh-cw': RefreshCw,
   broom: Broom,
   ellipsis: Ellipsis,
   'ellipsis-vertical': EllipsisVertical,
@@ -159,6 +163,7 @@ const defaults: Record<string, IconEntry> = {
   copy: Copy,
   'dollar-sign': DollarSign,
   bars: Menu,
+  'panel-left': PanelLeft,
   'panel-left-close': PanelLeftClose,
   'panel-left-open': PanelLeftOpen,
   plus: Plus,
@@ -207,6 +212,7 @@ const defaults: Record<string, IconEntry> = {
   'external-link': ExternalLink,
   'square-arrow-out-up-right': SquareArrowOutUpRight,
   github: Github,
+  monitor: Monitor,
 };
 
 for (const [name, icon] of Object.entries(defaults)) {

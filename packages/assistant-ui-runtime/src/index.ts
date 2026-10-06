@@ -49,7 +49,7 @@ export type {
 } from './messageCustomMetadata.js';
 export {
   collectRequiredActionInputs,
-  findPausedAssistantMessage,
+  findCurrentPausedAssistantMessage,
   messageHasPendingRequiredActions,
 } from './requiredActionInputs.js';
 export { getSession } from './sessions.js';
@@ -171,8 +171,6 @@ export type {
   SandboxCreatedEvent,
   SandboxProviderBase,
   SandboxProviderCatalogEntry,
-  SandboxProviderListEntry,
-  SandboxSnapshotSyncStatus,
   SaveAgentRequest,
   SaveAgentResult,
   Schedule,
