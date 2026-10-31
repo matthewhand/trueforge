@@ -25,3 +25,8 @@ overrides:
   resolve: '1.22.11'
   # Rollup 4.63.0 OOMs the frontend Vite build (Monaco + compression plugin); stay on 4.62.x.
   rollup: '4.62.2'
+  dompurify: '3.4.17'
+  shell-quote: '1.11.0'
+
+patchedDependencies:
+  monaco-editor@0.57.0: patches/monaco-editor@0.57.0.patch
