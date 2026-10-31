@@ -15,6 +15,9 @@ overrides:
   dompurify: 3.4.17
   shell-quote: 1.11.0
 
+patchedDependencies:
+  monaco-editor@0.57.0: 13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba
+
 importers:
 
   .:
@@ -115,7 +118,7 @@ importers:
         version: link:../trueforge-ui
       monaco-editor:
         specifier: ^0.57.0
-        version: 0.57.0
+        version: 0.57.0(patch_hash=13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba)
       react:
         specifier: ^19.2.4
         version: 19.3.0
@@ -158,7 +161,7 @@ importers:
         version: 2.5.3(rollup@4.62.2)
       vite-plugin-monaco-editor-esm:
         specifier: ^2.0.2
-        version: 2.0.3(monaco-editor@0.57.0)
+        version: 2.0.3(monaco-editor@0.57.0(patch_hash=13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba))
 
   packages/trueforge:
     dependencies:
@@ -430,7 +433,7 @@ importers:
         version: 0.562.0(react@19.3.0)
       monaco-editor:
         specifier: ^0.57.0
-        version: 0.57.0
+        version: 0.57.0(patch_hash=13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba)
       partial-json:
         specifier: ^0.1.7
         version: 0.1.7
@@ -14283,7 +14286,7 @@ snapshots:
 
   module-details-from-path@1.0.4: {}
 
-  monaco-editor@0.57.0:
+  monaco-editor@0.57.0(patch_hash=13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba):
     dependencies:
       dompurify: 3.4.17
       marked: 14.0.0
@@ -15788,9 +15791,9 @@ snapshots:
     transitivePeerDependencies:
       - rollup
 
-  vite-plugin-monaco-editor-esm@2.0.3(monaco-editor@0.57.0):
+  vite-plugin-monaco-editor-esm@2.0.3(monaco-editor@0.57.0(patch_hash=13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba)):
     dependencies:
-      monaco-editor: 0.57.0
+      monaco-editor: 0.57.0(patch_hash=13797188fc232bbd1782f84f1b36aad757375890541f582031d3124ae7c783ba)
 
   vite-plugin-svgr@5.2.0(rollup@4.62.2)(supports-color@8.1.1)(typescript@5.9.3)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.0)(tsx@4.23.15)(yaml@2.9.1)):
     dependencies:

@@ -27,3 +27,6 @@ overrides:
   rollup: '4.62.2'
   dompurify: '3.4.17'
   shell-quote: '1.11.0'
+
+patchedDependencies:
+  monaco-editor@0.57.0: patches/monaco-editor@0.57.0.patch
