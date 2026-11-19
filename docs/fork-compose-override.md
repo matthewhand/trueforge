@@ -66,7 +66,7 @@ curl -X PUT http://localhost:8791/api/v1/settings/model-providers \
 
 Notes learned the hard way:
 
-- PUT takes `{ "manifest": ... }` only — the provider name lives *inside* the
+- PUT takes `{ "manifest": ... }` only — the provider name lives _inside_ the
   manifest for `type: "custom"`.
 - Models are referenced elsewhere as FQN `orch/orchestration`
   (`provider-name/model-name`).
@@ -111,11 +111,11 @@ accepts either `agent: { "name": ... }` (named registry agent) or
 open-swarm's `RemoteHarness` contract (health / list / send) maps onto
 TrueForge's HTTP API with no code changes on either side:
 
-| open-swarm verb | TrueForge call | Notes |
-| --- | --- | --- |
-| **health** | `GET /healthz` | `{"status":"ok","version":...}`; 200 = UP |
-| **list** | `GET /api/v1/agents` (+ `GET /api/v1/sessions`) | agents = "listable workers"; paging via `limit`/cursor |
-| **send** | `POST /api/v1/sessions` then `POST .../turns` (`stream: false`) | sessions are cheap; open-swarm caches `session_id` per conversation |
+| open-swarm verb | TrueForge call                                                  | Notes                                                               |
+| --------------- | --------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **health**      | `GET /healthz`                                                  | `{"status":"ok","version":...}`; 200 = UP                           |
+| **list**        | `GET /api/v1/agents` (+ `GET /api/v1/sessions`)                 | agents = "listable workers"; paging via `limit`/cursor              |
+| **send**        | `POST /api/v1/sessions` then `POST .../turns` (`stream: false`) | sessions are cheap; open-swarm caches `session_id` per conversation |
 
 Send flow for open-swarm (public `/api/v1` only, verified end-to-end):
 
