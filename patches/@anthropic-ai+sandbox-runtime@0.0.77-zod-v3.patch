@@ -1,0 +1,24 @@
+diff --git a/dist/sandbox/sandbox-config.d.ts b/dist/sandbox/sandbox-config.d.ts
+--- a/dist/sandbox/sandbox-config.d.ts
++++ b/dist/sandbox/sandbox-config.d.ts
+@@ -3,7 +3,7 @@
+  * This is the main configuration interface that consumers pass to SandboxManager.initialize()
+  */
+ import type { FilterRequestCallback } from './request-filter.js';
+-import { z } from 'zod';
++import { z } from 'zod/v3';
+ /**
+  * Schema for MITM proxy configuration
+  * Allows routing specific domains through an upstream MITM proxy via Unix socket
+diff --git a/dist/sandbox/sandbox-config.js b/dist/sandbox/sandbox-config.js
+--- a/dist/sandbox/sandbox-config.js
++++ b/dist/sandbox/sandbox-config.js
+@@ -4,7 +4,7 @@
+  */
+ import { isIP } from 'node:net';
+ import { isAbsolute, posix as posixPath, win32 as win32Path } from 'node:path';
+-import { z } from 'zod';
++import { z } from 'zod/v3';
+ import { isInjectHostCoveredByAllowedDomains, splitDomainPatternPort, stripDomainPatternPort, } from './domain-pattern.js';
+ import { parseAddressRange } from './address.js';
+ import { containsGlobCharsForPlatform } from './sandbox-utils.js';

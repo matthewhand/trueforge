@@ -1,0 +1,36 @@
+diff --git a/dist/index.d.mts b/dist/index.d.mts
+--- a/dist/index.d.mts
++++ b/dist/index.d.mts
+@@ -1,4 +1,4 @@
+-import { z } from "zod";
++import { z } from "zod/v3";
+ 
+ //#region src/types.d.ts
+ declare const FunctionCallSchema: z.ZodObject<{
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -1,4 +1,4 @@
+-import { z } from "zod";
++import { z } from "zod/v3";
+ 
+ //#region src/types.d.ts
+ declare const FunctionCallSchema: z.ZodObject<{
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1,4 +1,4 @@
+-let zod = require("zod");
++let zod = require("zod/v3");
+ 
+ //#region src/types.ts
+ const FunctionCallSchema = zod.z.object({
+diff --git a/dist/index.mjs b/dist/index.mjs
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -1,4 +1,4 @@
+-import { z } from "zod";
++import { z } from "zod/v3";
+ 
+ //#region src/types.ts
+ const FunctionCallSchema = z.object({

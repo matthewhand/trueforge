@@ -38,9 +38,12 @@ overrides:
   'undici@>=7.0.0 <7.30.1': '7.30.1'
   'vite@>=6.0.0 <=6.4.3': '6.4.6'
   'zod@>=4.0.0 <4.6.6': '4.6.7'
+  # The patches below keep these legacy callers on the supported Zod v3 API.
+  '@ag-ui/core@0.0.53>zod': '4.6.7'
+  '@anthropic-ai/sandbox-runtime@0.0.77>zod': '4.6.7'
 
 patchedDependencies:
+  '@ag-ui/core@0.0.53': patches/@ag-ui+core@0.0.53-zod-v3.patch
+  '@anthropic-ai/sandbox-runtime@0.0.77': patches/@anthropic-ai+sandbox-runtime@0.0.77-zod-v3.patch
   monaco-editor@0.57.0: patches/monaco-editor@0.57.0.patch
-  # Keep the legacy Zod collection guards until a compatible release lands.
-  zod@3.25.76: patches/zod-3.25.76-collection-bounds.patch
   zod@4.6.7: patches/zod-4.6.7-legacy-collection-bounds.patch

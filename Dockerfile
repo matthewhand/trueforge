@@ -5,8 +5,8 @@
 # build needs the whole pnpm workspace as its context: the server depends on
 # the workspace package @truefoundry/trueforge-core.
 #
-# Dependency install uses pnpm fetch (lockfile-only) then install --offline so
-# the download layer stays cached when only package.json / scripts change.
+# Dependency install uses pnpm fetch then install --offline so the download
+# layer stays cached when application sources change.
 # See https://pnpm.io/cli/fetch. BuildKit cache mounts are avoided so the same
 # file builds on Railway Metal (which requires a hardcoded service id in mount ids).
 #
@@ -27,27 +27,27 @@ FROM ${BUILD_BASE_IMAGE} AS base
 USER root
 ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable && pnpm config set store-dir /pnpm/store
+RUN corepack enable
 WORKDIR /app
 
 # ---------------------------------------------------------------------------
-# store: the pnpm store, from the lockfile only (stable when manifests churn).
+# store: the pnpm store, from the lockfile and its patch inputs.
 # BuildKit cache mounts are omitted: Railway's Metal builder requires
 # `id=s/<service-id>-…` (hardcoded per deploy), which cannot live in a shared
-# OSS Dockerfile. Layer cache on this stage still hits when the lockfile is
-# unchanged.
+# OSS Dockerfile. Copy the root manifest here to select its pinned pnpm version.
 # ---------------------------------------------------------------------------
 FROM base AS store
-COPY pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 # Populate /pnpm/store only; drop the full virtual store fetch also writes.
-RUN pnpm fetch && rm -rf node_modules
+RUN pnpm config set store-dir /pnpm/store && pnpm fetch && rm -rf node_modules
 
 # ---------------------------------------------------------------------------
 # workspace: install inputs shared by every stage below - the manifests plus the
 # sources the root postinstall hook (build:gen) inlines.
 # ---------------------------------------------------------------------------
 FROM store AS workspace
-COPY package.json .npmrc tsconfig.base.json ./
+COPY .npmrc tsconfig.base.json ./
 # Root scripts used by package build steps (rm-path.mjs, chmod-path.mjs).
 COPY scripts scripts
 COPY packages/trueforge-core/package.json packages/trueforge-core/package.json
