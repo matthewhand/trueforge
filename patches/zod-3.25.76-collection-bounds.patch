@@ -1,0 +1,321 @@
+diff --git a/src/v3/types.ts b/src/v3/types.ts
+index b10e84f..87a205e 100644
+--- a/src/v3/types.ts
++++ b/src/v3/types.ts
+@@ -2295,6 +2295,14 @@ export class ZodArray<T extends ZodTypeAny, Cardinality extends ArrayCardinality
+       }
+     }
+
++    // an oversized array fails before any element is parsed
++    if (
++      (def.exactLength !== null && ctx.data.length > def.exactLength.value) ||
++      (def.maxLength !== null && ctx.data.length > def.maxLength.value)
++    ) {
++      return INVALID;
++    }
++
+     if (ctx.common.async) {
+       return Promise.all(
+         ([...ctx.data] as any[]).map((item, i) => {
+@@ -3723,7 +3731,8 @@ export class ZodSet<Value extends ZodTypeAny = ZodTypeAny> extends ZodType<
+           exact: false,
+           message: def.maxSize.message,
+         });
+-        status.dirty();
++        // an oversized set fails before any element is parsed
++        return INVALID;
+       }
+     }
+
+diff --git a/src/v4/core/schemas.ts b/src/v4/core/schemas.ts
+index ce16838..b679afc 100644
+--- a/src/v4/core/schemas.ts
++++ b/src/v4/core/schemas.ts
+@@ -1507,6 +1507,51 @@ export interface $ZodArrayInternals<T extends SomeType = $ZodType> extends _$Zod
+
+ export interface $ZodArray<T extends SomeType = $ZodType> extends $ZodType<any, any, $ZodArrayInternals<T>> {}
+
++/** The leading size checks of `defChecks` that set an upper bound, each paired with it. */
++function sizeCaps(defChecks: checks.$ZodCheck<never>[] | undefined): [number, checks.$ZodCheck<never>][] {
++  const caps: [number, checks.$ZodCheck<never>][] = [];
++  for (const ch of defChecks ?? []) {
++    const d = ch._zod.def as any;
++    // a later check may rewrite the value
++    if (!/_(length|size)$|_equals$/.test(d.check)) break;
++    const max = d.maximum ?? d.length ?? d.size;
++    if (max >= 0) caps.push([max, ch]);
++  }
++  return caps;
++}
++
++// an oversized container fails its leading size checks before any element is parsed
++function capSize(inst: $ZodType, size: (input: any) => number): void {
++  const caps = sizeCaps(inst._zod.def.checks);
++  if (!caps.length) return;
++  const cap = Math.min(...caps.map((c) => c[0]));
++  // deferred, since a later `$ZodType.init` replaces `run`
++  inst._zod.deferred ??= [];
++  inst._zod.deferred.push(() => {
++    const run = inst._zod.run;
++    // rejecting before `run` skips every check, so none reads the raw input
++    inst._zod.run = (payload, ctx) => {
++      const n = size(payload.value);
++      if (n > cap) {
++        for (const [max, ch] of sizeCaps(inst._zod.def.checks)) {
++          if (n > max && ch._zod.def.when!(payload)) {
++            const start = payload.issues.length;
++            ch._zod.check(payload as ParsePayload<never>);
++            // the value is still the raw input, so no parent check may read it
++            (payload.issues[start] as { continue?: boolean }).continue = false;
++            return payload;
++          }
++        }
++      }
++      return run(payload, ctx);
++    };
++  });
++}
++
++const arraySize = (input: unknown): number => (Array.isArray(input) ? input.length : -1);
++const mapSize = (input: unknown): number => (input instanceof Map ? input.size : -1);
++const setSize = (input: unknown): number => (input instanceof Set ? input.size : -1);
++
+ function handleArrayResult(result: ParsePayload<any>, final: ParsePayload<any[]>, index: number) {
+   if (result.issues.length) {
+     final.issues.push(...util.prefixIssues(index, result.issues));
+@@ -1555,6 +1600,7 @@ export const $ZodArray: core.$constructor<$ZodArray> = /*@__PURE__*/ core.$const
+
+     return payload; //handleArrayResultsAsync(parseResults, final);
+   };
++  capSize(inst, arraySize);
+ });
+
+ //////////////////////////////////////////
+@@ -2599,6 +2645,7 @@ export const $ZodMap: core.$constructor<$ZodMap> = /*@__PURE__*/ core.$construct
+     if (proms.length) return Promise.all(proms).then(() => payload);
+     return payload;
+   };
++  capSize(inst, mapSize);
+ });
+
+ function handleMapResult(
+@@ -2691,6 +2738,7 @@ export const $ZodSet: core.$constructor<$ZodSet> = /*@__PURE__*/ core.$construct
+     if (proms.length) return Promise.all(proms).then(() => payload);
+     return payload;
+   };
++  capSize(inst, setSize);
+ });
+
+ function handleSetResult(result: ParsePayload, final: ParsePayload<Set<any>>) {
+diff --git a/v3/types.cjs b/v3/types.cjs
+index 11ed4df..3c1a1b7 100644
+--- a/v3/types.cjs
++++ b/v3/types.cjs
+@@ -1819,6 +1819,11 @@ class ZodArray extends ZodType {
+                 status.dirty();
+             }
+         }
++        // an oversized array fails before any element is parsed
++        if ((def.exactLength !== null && ctx.data.length > def.exactLength.value) ||
++            (def.maxLength !== null && ctx.data.length > def.maxLength.value)) {
++            return parseUtil_js_1.INVALID;
++        }
+         if (ctx.common.async) {
+             return Promise.all([...ctx.data].map((item, i) => {
+                 return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+@@ -2843,7 +2848,8 @@ class ZodSet extends ZodType {
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                // an oversized set fails before any element is parsed
++                return parseUtil_js_1.INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/v3/types.js b/v3/types.js
+index 40b11c0..eba21a1 100644
+--- a/v3/types.js
++++ b/v3/types.js
+@@ -1798,6 +1798,11 @@ export class ZodArray extends ZodType {
+                 status.dirty();
+             }
+         }
++        // an oversized array fails before any element is parsed
++        if ((def.exactLength !== null && ctx.data.length > def.exactLength.value) ||
++            (def.maxLength !== null && ctx.data.length > def.maxLength.value)) {
++            return INVALID;
++        }
+         if (ctx.common.async) {
+             return Promise.all([...ctx.data].map((item, i) => {
+                 return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+@@ -2814,7 +2819,8 @@ export class ZodSet extends ZodType {
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                // an oversized set fails before any element is parsed
++                return INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/v4/core/schemas.cjs b/v4/core/schemas.cjs
+index 7c77d2b..f8ea2c1 100644
+--- a/v4/core/schemas.cjs
++++ b/v4/core/schemas.cjs
+@@ -644,6 +644,51 @@ exports.$ZodDate = core.$constructor("$ZodDate", (inst, def) => {
+         return payload;
+     };
+ });
++/** The leading size checks of `defChecks` that set an upper bound, each paired with it. */
++function sizeCaps(defChecks) {
++    const caps = [];
++    for (const ch of defChecks ?? []) {
++        const d = ch._zod.def;
++        // a later check may rewrite the value
++        if (!/_(length|size)$|_equals$/.test(d.check))
++            break;
++        const max = d.maximum ?? d.length ?? d.size;
++        if (max >= 0)
++            caps.push([max, ch]);
++    }
++    return caps;
++}
++// an oversized container fails its leading size checks before any element is parsed
++function capSize(inst, size) {
++    const caps = sizeCaps(inst._zod.def.checks);
++    if (!caps.length)
++        return;
++    const cap = Math.min(...caps.map((c) => c[0]));
++    // deferred, since a later `$ZodType.init` replaces `run`
++    inst._zod.deferred ??= [];
++    inst._zod.deferred.push(() => {
++        const run = inst._zod.run;
++        // rejecting before `run` skips every check, so none reads the raw input
++        inst._zod.run = (payload, ctx) => {
++            const n = size(payload.value);
++            if (n > cap) {
++                for (const [max, ch] of sizeCaps(inst._zod.def.checks)) {
++                    if (n > max && ch._zod.def.when(payload)) {
++                        const start = payload.issues.length;
++                        ch._zod.check(payload);
++                        // the value is still the raw input, so no parent check may read it
++                        payload.issues[start].continue = false;
++                        return payload;
++                    }
++                }
++            }
++            return run(payload, ctx);
++        };
++    });
++}
++const arraySize = (input) => (Array.isArray(input) ? input.length : -1);
++const mapSize = (input) => (input instanceof Map ? input.size : -1);
++const setSize = (input) => (input instanceof Set ? input.size : -1);
+ function handleArrayResult(result, final, index) {
+     if (result.issues.length) {
+         final.issues.push(...util.prefixIssues(index, result.issues));
+@@ -683,6 +728,7 @@ exports.$ZodArray = core.$constructor("$ZodArray", (inst, def) => {
+         }
+         return payload; //handleArrayResultsAsync(parseResults, final);
+     };
++    capSize(inst, arraySize);
+ });
+ function handleObjectResult(result, final, key) {
+     // if(isOptional)
+@@ -1304,6 +1350,7 @@ exports.$ZodMap = core.$constructor("$ZodMap", (inst, def) => {
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capSize(inst, mapSize);
+ });
+ function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
+     if (keyResult.issues.length) {
+@@ -1364,6 +1411,7 @@ exports.$ZodSet = core.$constructor("$ZodSet", (inst, def) => {
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capSize(inst, setSize);
+ });
+ function handleSetResult(result, final) {
+     if (result.issues.length) {
+diff --git a/v4/core/schemas.js b/v4/core/schemas.js
+index 692ce1f..880cf83 100644
+--- a/v4/core/schemas.js
++++ b/v4/core/schemas.js
+@@ -613,6 +613,51 @@ export const $ZodDate = /*@__PURE__*/ core.$constructor("$ZodDate", (inst, def)
+         return payload;
+     };
+ });
++/** The leading size checks of `defChecks` that set an upper bound, each paired with it. */
++function sizeCaps(defChecks) {
++    const caps = [];
++    for (const ch of defChecks ?? []) {
++        const d = ch._zod.def;
++        // a later check may rewrite the value
++        if (!/_(length|size)$|_equals$/.test(d.check))
++            break;
++        const max = d.maximum ?? d.length ?? d.size;
++        if (max >= 0)
++            caps.push([max, ch]);
++    }
++    return caps;
++}
++// an oversized container fails its leading size checks before any element is parsed
++function capSize(inst, size) {
++    const caps = sizeCaps(inst._zod.def.checks);
++    if (!caps.length)
++        return;
++    const cap = Math.min(...caps.map((c) => c[0]));
++    // deferred, since a later `$ZodType.init` replaces `run`
++    inst._zod.deferred ??= [];
++    inst._zod.deferred.push(() => {
++        const run = inst._zod.run;
++        // rejecting before `run` skips every check, so none reads the raw input
++        inst._zod.run = (payload, ctx) => {
++            const n = size(payload.value);
++            if (n > cap) {
++                for (const [max, ch] of sizeCaps(inst._zod.def.checks)) {
++                    if (n > max && ch._zod.def.when(payload)) {
++                        const start = payload.issues.length;
++                        ch._zod.check(payload);
++                        // the value is still the raw input, so no parent check may read it
++                        payload.issues[start].continue = false;
++                        return payload;
++                    }
++                }
++            }
++            return run(payload, ctx);
++        };
++    });
++}
++const arraySize = (input) => (Array.isArray(input) ? input.length : -1);
++const mapSize = (input) => (input instanceof Map ? input.size : -1);
++const setSize = (input) => (input instanceof Set ? input.size : -1);
+ function handleArrayResult(result, final, index) {
+     if (result.issues.length) {
+         final.issues.push(...util.prefixIssues(index, result.issues));
+@@ -652,6 +697,7 @@ export const $ZodArray = /*@__PURE__*/ core.$constructor("$ZodArray", (inst, def
+         }
+         return payload; //handleArrayResultsAsync(parseResults, final);
+     };
++    capSize(inst, arraySize);
+ });
+ function handleObjectResult(result, final, key) {
+     // if(isOptional)
+@@ -1273,6 +1319,7 @@ export const $ZodMap = /*@__PURE__*/ core.$constructor("$ZodMap", (inst, def) =>
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capSize(inst, mapSize);
+ });
+ function handleMapResult(keyResult, valueResult, final, key, input, inst, ctx) {
+     if (keyResult.issues.length) {
+@@ -1333,6 +1380,7 @@ export const $ZodSet = /*@__PURE__*/ core.$constructor("$ZodSet", (inst, def) =>
+             return Promise.all(proms).then(() => payload);
+         return payload;
+     };
++    capSize(inst, setSize);
+ });
+ function handleSetResult(result, final) {
+     if (result.issues.length) {

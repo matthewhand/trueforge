@@ -1,0 +1,81 @@
+diff --git a/src/v3/types.ts b/src/v3/types.ts
+index 17bef73..bfdf76a 100644
+--- a/src/v3/types.ts
++++ b/src/v3/types.ts
+@@ -2297,6 +2297,14 @@ export class ZodArray<T extends ZodTypeAny, Cardinality extends ArrayCardinality
+       }
+     }
+
++    // an oversized array fails before any element is parsed
++    if (
++      (def.exactLength !== null && ctx.data.length > def.exactLength.value) ||
++      (def.maxLength !== null && ctx.data.length > def.maxLength.value)
++    ) {
++      return INVALID;
++    }
++
+     if (ctx.common.async) {
+       return Promise.all(
+         ([...ctx.data] as any[]).map((item, i) => {
+@@ -3727,7 +3735,8 @@ export class ZodSet<Value extends ZodTypeAny = ZodTypeAny> extends ZodType<
+           exact: false,
+           message: def.maxSize.message,
+         });
+-        status.dirty();
++        // an oversized set fails before any element is parsed
++        return INVALID;
+       }
+     }
+
+diff --git a/v3/types.cjs b/v3/types.cjs
+index 7c3fa90..7e54ce5 100644
+--- a/v3/types.cjs
++++ b/v3/types.cjs
+@@ -1821,6 +1821,11 @@ class ZodArray extends ZodType {
+                 status.dirty();
+             }
+         }
++        // an oversized array fails before any element is parsed
++        if ((def.exactLength !== null && ctx.data.length > def.exactLength.value) ||
++            (def.maxLength !== null && ctx.data.length > def.maxLength.value)) {
++            return parseUtil_js_1.INVALID;
++        }
+         if (ctx.common.async) {
+             return Promise.all([...ctx.data].map((item, i) => {
+                 return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+@@ -2849,7 +2854,8 @@ class ZodSet extends ZodType {
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                // an oversized set fails before any element is parsed
++                return parseUtil_js_1.INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/v3/types.js b/v3/types.js
+index ea2be4d..ac0335b 100644
+--- a/v3/types.js
++++ b/v3/types.js
+@@ -1800,6 +1800,11 @@ export class ZodArray extends ZodType {
+                 status.dirty();
+             }
+         }
++        // an oversized array fails before any element is parsed
++        if ((def.exactLength !== null && ctx.data.length > def.exactLength.value) ||
++            (def.maxLength !== null && ctx.data.length > def.maxLength.value)) {
++            return INVALID;
++        }
+         if (ctx.common.async) {
+             return Promise.all([...ctx.data].map((item, i) => {
+                 return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+@@ -2820,7 +2825,8 @@ export class ZodSet extends ZodType {
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                // an oversized set fails before any element is parsed
++                return INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
